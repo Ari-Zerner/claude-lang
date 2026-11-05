@@ -104,15 +104,16 @@ CHAR_HINTS = {
     ";": "a statement ends at the end of its line; drop the `;`",
     "&&": "write `and`", "||": "write `or`", "!": "write `not`",
     "[": "lists aren't implemented yet", "]": "lists aren't implemented yet",
-    '"': "strings aren't implemented yet", "'": "strings aren't implemented yet",
+    "'": "strings use double quotes: `\"...\"`",
 }
+STRING_ESCAPES = {"n": "\n", "t": "\t", "\\": "\\", '"': '"', "{": "{", "}": "}"}
 
 
 class Tok:
-    __slots__ = ("kind", "text", "line", "col")
+    __slots__ = ("kind", "text", "line", "col", "parts")
 
-    def __init__(self, kind, text, line, col):
-        self.kind, self.text, self.line, self.col = kind, text, line, col
+    def __init__(self, kind, text, line, col, parts=None):
+        self.kind, self.text, self.line, self.col, self.parts = kind, text, line, col, parts
 
     def __repr__(self):
         return f"Tok({self.kind},{self.text!r},{self.line}:{self.col})"
@@ -123,57 +124,131 @@ def lex(src, d):
     toks = []
     lines = src.split("\n")
     for lineno, line in enumerate(lines, 1):
-        i, n, before = 0, len(line), len(toks)
-        while i < n:
-            c, col = line[i], i + 1
-            if c in " \t\r":
-                i += 1
-            elif c == "#":
-                break
-            elif c.isdigit():
-                j = i
-                while j < n and (line[j].isalnum() or line[j] == "_"):
-                    j += 1
-                text = line[i:j]
-                digits = text.replace("_", "")
-                if not digits.isdigit():
-                    d.error("bad-number", f"`{text}` is neither a number nor a name (names can't start with a digit)",
-                            lineno, col, len(text))
-                    digits = "0"
-                elif int(digits) > 2**63 - 1:
-                    d.error("int-too-big", f"`{text}` doesn't fit in an Int (64-bit signed)", lineno, col, len(text))
-                    digits = "0"
-                toks.append(Tok("int", digits, lineno, col))
-                i = j
-            elif c.isalpha() or c == "_":
-                j = i
-                while j < n and (line[j].isalnum() or line[j] == "_"):
-                    j += 1
-                w = line[i:j]
-                toks.append(Tok("kw" if w in KEYWORDS else "name", w, lineno, col))
-                i = j
-            elif line[i:i + 2] in TWO_CHAR_OPS:
-                toks.append(Tok("op", line[i:i + 2], lineno, col))
-                i += 2
-            elif line[i:i + 2] in ("&&", "||"):
-                d.error("bad-char", f"`{line[i:i+2]}` isn't an operator here; {CHAR_HINTS[line[i:i+2]]}", lineno, col, 2)
-                toks.append(Tok("kw", "and" if c == "&" else "or", lineno, col))  # recover
-                i += 2
-            elif c == "!":
-                d.error("bad-char", f"`!` isn't an operator here; {CHAR_HINTS['!']}", lineno, col, 1)
-                toks.append(Tok("kw", "not", lineno, col))  # recover
-                i += 1
-            elif c in ONE_CHAR_OPS:
-                toks.append(Tok("op", c, lineno, col))
-                i += 1
-            else:
-                hint = CHAR_HINTS.get(c)
-                d.error("bad-char", f"`{c}` isn't part of the language" + (f"; {hint}" if hint else ""), lineno, col)
-                i += 1
+        before = len(toks)
+        lex_span(line, 0, len(line), lineno, d, toks)
         if len(toks) > before:
-            toks.append(Tok("nl", "", lineno, n + 1))
+            toks.append(Tok("nl", "", lineno, len(line) + 1))
     toks.append(Tok("eof", "", len(lines), 1))
     return toks
+
+
+def lex_span(line, i, n, lineno, d, toks, in_interp=False):
+    """Tokens for line[i:n], appended to toks (columns are real columns in the line)."""
+    while i < n:
+        c, col = line[i], i + 1
+        if c in " \t\r":
+            i += 1
+        elif c == "#" and not in_interp:
+            break
+        elif c == "'" and not in_interp and "'" in line[i + 1:n]:
+            close = line.index("'", i + 1)
+            d.error("bad-char", "strings use double quotes", lineno, col, close - i + 1,
+                    f"`\"{line[i + 1:close]}\"`")
+            toks.append(Tok("str", line[i:close + 1], lineno, col, [("text", line[i + 1:close])]))  # recover
+            i = close + 1
+        elif c == '"':
+            if in_interp:
+                d.error("nested-string", "a string can't appear inside `{...}` in another string",
+                        lineno, col, 1, "store it in a `let` first and interpolate the name")
+                return
+            i = lex_string(line, i, n, lineno, d, toks)
+        elif c.isdigit():
+            j = i
+            while j < n and (line[j].isalnum() or line[j] == "_"):
+                j += 1
+            text = line[i:j]
+            digits = text.replace("_", "")
+            if not digits.isdigit():
+                d.error("bad-number", f"`{text}` is neither a number nor a name (names can't start with a digit)",
+                        lineno, col, len(text))
+                digits = "0"
+            elif int(digits) > 2**63 - 1:
+                d.error("int-too-big", f"`{text}` doesn't fit in an Int (64-bit signed)", lineno, col, len(text))
+                digits = "0"
+            toks.append(Tok("int", digits, lineno, col))
+            i = j
+        elif c.isalpha() or c == "_":
+            j = i
+            while j < n and (line[j].isalnum() or line[j] == "_"):
+                j += 1
+            w = line[i:j]
+            toks.append(Tok("kw" if w in KEYWORDS else "name", w, lineno, col))
+            i = j
+        elif line[i:i + 2] in TWO_CHAR_OPS:
+            toks.append(Tok("op", line[i:i + 2], lineno, col))
+            i += 2
+        elif line[i:i + 2] in ("&&", "||"):
+            d.error("bad-char", f"`{line[i:i+2]}` isn't an operator here; {CHAR_HINTS[line[i:i+2]]}", lineno, col, 2)
+            toks.append(Tok("kw", "and" if c == "&" else "or", lineno, col))  # recover
+            i += 2
+        elif c == "!":
+            d.error("bad-char", f"`!` isn't an operator here; {CHAR_HINTS['!']}", lineno, col, 1)
+            toks.append(Tok("kw", "not", lineno, col))  # recover
+            i += 1
+        elif c in ONE_CHAR_OPS:
+            toks.append(Tok("op", c, lineno, col))
+            i += 1
+        else:
+            hint = CHAR_HINTS.get(c)
+            d.error("bad-char", f"`{c}` isn't part of the language" + (f"; {hint}" if hint else ""), lineno, col)
+            i += 1
+
+
+def lex_string(line, i, n, lineno, d, toks):
+    """A string literal starting at line[i] == '"'. Parts are ("text", str) or ("expr", tokens).
+    Strings end on the line they start (D13)."""
+    start, parts, buf = i, [], []
+    i += 1
+    while True:
+        if i >= n:
+            d.error("unclosed-string", "this string has no closing `\"` on its line", lineno, start + 1,
+                    n - start, "strings end on the line they start; use `\\n` for a line break")
+            break
+        c = line[i]
+        if c == '"':
+            i += 1
+            break
+        if c == "\\":
+            e = line[i + 1:i + 2]
+            if e in STRING_ESCAPES:
+                buf.append(STRING_ESCAPES[e])
+            else:
+                d.error("bad-escape", f"unknown escape `\\{e}`; the escapes are \\n \\t \\\\ \\\" \\{{ \\}}",
+                        lineno, i + 1, 2)
+            i += 2
+            continue
+        if c == "{":
+            close = line.find("}", i + 1)
+            if close == -1 or close >= n:
+                d.error("unclosed-interpolation", "`{` starts an interpolation, but there's no `}`", lineno, i + 1,
+                        1, "write `\\{` for a literal brace")
+                i = n
+                continue
+            if buf:
+                parts.append(("text", "".join(buf)))
+                buf = []
+            if '"' in line[i + 1:close]:
+                q = line.index('"', i + 1)
+                d.error("nested-string", "a string can't appear inside `{...}` in another string",
+                        lineno, q + 1, 1, "store it in a `let` first and interpolate the name")
+                i = close + 1
+                continue
+            sub = []
+            lex_span(line, i + 1, close, lineno, d, sub, in_interp=True)
+            if not sub:
+                d.error("empty-interpolation", "`{}` has nothing inside", lineno, i + 1, 2,
+                        "put an expression inside, or write `\\{}` for literal braces")
+            else:
+                sub.append(Tok("eof", "", lineno, close + 1))
+                parts.append(("expr", sub))
+            i = close + 1
+            continue
+        buf.append(c)
+        i += 1
+    if buf or not parts:
+        parts.append(("text", "".join(buf)))
+    toks.append(Tok("str", line[start:i], lineno, start + 1, parts))
+    return i
 
 
 # ------------------------------------------------------------------ AST
@@ -192,6 +267,9 @@ def render(e):
         s = str(e.value)
     elif k == "bool":
         s = "true" if e.value else "false"
+    elif k == "str":
+        s = '"' + "".join(escape_text(p) if kind == "text" else "{" + render(p) + "}"
+                          for kind, p in e.parts) + '"'
     elif k == "name":
         s = e.name
     elif k == "call":
@@ -205,6 +283,11 @@ def render(e):
     else:
         s = "?"
     return f"({s})" if e.paren else s
+
+
+def escape_text(t):
+    return (t.replace("\\", "\\\\").replace('"', '\\"').replace("{", "\\{").replace("}", "\\}")
+            .replace("\n", "\\n").replace("\t", "\\t"))
 
 
 def opener(kind, name):
@@ -230,9 +313,10 @@ def fold(operands, ops):
 
 # ------------------------------------------------------------------ parser
 
-TYPES = ("Int", "Bool")
+TYPES = ("Int", "Bool", "String")
 TYPE_HINTS = {"int": "Int", "i64": "Int", "i32": "Int", "Integer": "Int", "integer": "Int", "long": "Int",
-              "bool": "Bool", "boolean": "Bool", "Boolean": "Bool"}
+              "bool": "Bool", "boolean": "Bool", "Boolean": "Bool",
+              "str": "String", "Str": "String", "string": "String", "text": "String", "Text": "String"}
 NO_RETURN_TYPES = ("Unit", "Void", "void", "None", "Nothing")
 FN_WORDS = ("def", "func", "function", "fun", "proc")
 CLOSER_WORDS = {"endif": "if", "fi": "if", "endwhile": "while", "done": "while", "endfn": "fn"}
@@ -340,7 +424,7 @@ class Parser:
     def parse_type(self, ret=False):
         t = self.peek()
         if t.kind != "name":
-            self.fail("syntax", f"expected a type (Int or Bool), found {describe(t)}", t)
+            self.fail("syntax", f"expected a type (Int, Bool or String), found {describe(t)}", t)
         self.next()
         if t.text in TYPES:
             return t.text
@@ -349,7 +433,7 @@ class Parser:
             self.d.error("unknown-type", msg, t.line, t.col, len(t.text))
             return "Unit" if ret else None
         hint = TYPE_HINTS.get(t.text) or next(iter(difflib.get_close_matches(t.text, TYPES, 1)), None)
-        self.d.error("unknown-type", f"unknown type `{t.text}`; the types are Int and Bool", t.line, t.col,
+        self.d.error("unknown-type", f"unknown type `{t.text}`; the types are Int, Bool and String", t.line, t.col,
                      len(t.text), f"write `{hint}`" if hint else None)
         return None
 
@@ -696,6 +780,24 @@ class Parser:
         if t.kind == "kw" and t.text in ("true", "false"):
             self.next()
             return Node("bool", t, value=t.text == "true")
+        if t.kind == "str":
+            self.next()
+            parts = []
+            for kind, p in t.parts:
+                if kind == "text":
+                    parts.append(("text", p))
+                    continue
+                sub = Parser(p, self.d)
+                try:
+                    e = sub.expr()
+                    if not sub.at("eof"):
+                        x = sub.peek()
+                        self.d.error("syntax", f"unexpected {describe(x)} inside `{{...}}`", x.line, x.col,
+                                     len(x.text), "an interpolation holds one expression")
+                    parts.append(("expr", e))
+                except ParseError:
+                    parts.append(("expr", Node("bool", p[0], value=False)))  # placeholder; already reported
+            return Node("str", t, parts=parts)
         if t.kind == "name":
             self.next()
             if self.at_op("("):
@@ -931,7 +1033,8 @@ class Checker:
 
     def need(self, e, t, want, op):
         if t and t != want:
-            self.err_at("type-mismatch", f"`{op}` needs {want}, but `{render(e)}` is {t}", e)
+            fix = "join strings with interpolation: `\"{a}{b}\"`" if (t, op) == ("String", "+") else None
+            self.err_at("type-mismatch", f"`{op}` needs {want}, but `{render(e)}` is {t}", e, fix)
 
     def expr(self, e):
         e.ty = self._expr(e)
@@ -943,6 +1046,11 @@ class Checker:
             return "Int"
         if k == "bool":
             return "Bool"
+        if k == "str":
+            for kind, p in e.parts:
+                if kind == "expr" and self.expr(p) == "Unit":
+                    self.err_at("unit-value", f"`{render(p)}` returns nothing, so there's nothing to interpolate", p)
+            return "String"
         if k == "name":
             if e.name == "_":
                 self.err("syntax", "`_` discards a value; it can't be read", e.tok)
@@ -1055,9 +1163,10 @@ class Checker:
 
 # ------------------------------------------------------------------ C emitter (D1)
 
-CTYPE = {"Int": "int64_t", "Bool": "bool", "Unit": "void"}
+CTYPE = {"Int": "int64_t", "Bool": "bool", "String": "const char *", "Unit": "void"}
 
-RUNTIME = r"""#include <stdbool.h>
+RUNTIME = r"""#include <stdarg.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -1087,6 +1196,29 @@ static int64_t cl_neg(int64_t a, int l, int c) {
     if (a == INT64_MIN) cl_trap("integer overflow in `-`", l, c); return -a; }
 static void cl_print_int(int64_t v) { printf("%lld\n", (long long)v); }
 static void cl_print_bool(bool v) { puts(v ? "true" : "false"); }
+static void cl_print_str(const char *s) { puts(s); }
+
+/* Strings are immutable, NUL-terminated UTF-8. v0 never frees them (see DESIGN.md, D18). */
+static void *cl_alloc(size_t n) {
+    void *p = malloc(n);
+    if (!p) { fputs("runtime error: out of memory\n", stderr); exit(70); }
+    return p;
+}
+static const char *cl_int_str(int64_t v) {
+    char *p = cl_alloc(24); snprintf(p, 24, "%lld", (long long)v); return p; }
+static const char *cl_concat(int n, ...) {
+    va_list ap; size_t len = 0;
+    va_start(ap, n); for (int i = 0; i < n; i++) len += strlen(va_arg(ap, const char *)); va_end(ap);
+    char *out = cl_alloc(len + 1), *q = out;
+    va_start(ap, n);
+    for (int i = 0; i < n; i++) { const char *s = va_arg(ap, const char *); size_t k = strlen(s); memcpy(q, s, k); q += k; }
+    va_end(ap);
+    *q = 0; return out;
+}
+static void cl_hex(const char *s) {
+    if (!*s) { putchar('-'); return; }
+    for (; *s; s++) printf("%02x", (unsigned char)*s);
+}
 """
 
 MAIN = r"""
@@ -1096,6 +1228,14 @@ int main(int argc, char **argv) {
     return 0;
 }
 """
+
+def c_string(t):
+    """A C string literal for t: printable ASCII as is, everything else (and ? for trigraphs) in octal."""
+    out = []
+    for b in t.encode("utf-8"):
+        out.append(chr(b) if 32 <= b < 127 and chr(b) not in '"\\?' else f"\\{b:03o}")
+    return '"' + "".join(out) + '"'
+
 
 ARITH_FN = {"+": "cl_add", "-": "cl_sub", "*": "cl_mul", "/": "cl_div", "%": "cl_mod"}
 
@@ -1123,7 +1263,11 @@ class Emitter:
         for i, s in enumerate(self.examples):
             out.append(f'    printf("EXRUN {i}\\n"); fflush(stdout);')
             e = s.expr
-            if e.kind == "bin" and e.op == "==" and not e.paren:
+            if e.kind == "bin" and e.op == "==" and not e.paren and e.left.ty == "String":
+                out.append(f"    {{ const char *l = {self.expr(e.left)}; const char *r = {self.expr(e.right)};")
+                out.append(f'      if (strcmp(l, r) != 0) {{ printf("EXFAILS {i} "); cl_hex(l); putchar(\' \'); '
+                           'cl_hex(r); putchar(\'\\n\'); failed++; } }')
+            elif e.kind == "bin" and e.op == "==" and not e.paren:
                 out.append(f"    {{ int64_t l = {self.expr(e.left)}; int64_t r = {self.expr(e.right)};")
                 out.append(f'      if (l != r) {{ printf("EXFAIL {i} %lld %lld\\n", (long long)l, (long long)r); '
                            "failed++; } }")
@@ -1175,6 +1319,20 @@ class Emitter:
             return f"INT64_C({e.value})"
         if k == "bool":
             return "true" if e.value else "false"
+        if k == "str":
+            pieces = []
+            for kind, p in e.parts:
+                if kind == "text":
+                    pieces.append(c_string(p))
+                elif p.ty == "String":
+                    pieces.append(self.expr(p))
+                elif p.ty == "Bool":
+                    pieces.append(f'({self.expr(p)} ? "true" : "false")')
+                else:
+                    pieces.append(f"cl_int_str({self.expr(p)})")
+            if len(pieces) == 1 and e.parts[0][0] == "text":
+                return pieces[0]
+            return f"cl_concat({len(pieces)}, " + ", ".join(pieces) + ")"
         if k == "name":
             return f"v_{e.name}"
         if k == "neg":
@@ -1185,12 +1343,15 @@ class Emitter:
             l, r = self.expr(e.left), self.expr(e.right)
             if e.op in ARITH_FN:
                 return f"{ARITH_FN[e.op]}({l}, {r}, {e.tok.line}, {e.tok.col})"
+            if e.op in ("==", "!=") and e.left.ty == "String":
+                return f"(strcmp({l}, {r}) {e.op} 0)"
             op = {"and": "&&", "or": "||"}.get(e.op, e.op)
             return f"({l} {op} {r})"
         if k == "call":
             if e.name == "print":
                 a = e.args[0][2]
-                return f"cl_print_{'bool' if a.ty == 'Bool' else 'int'}({self.expr(a)})"
+                kind = {"Bool": "bool", "String": "str"}.get(a.ty, "int")
+                return f"cl_print_{kind}({self.expr(a)})"
             return f"f_{e.name}(" + ", ".join(self.expr(a) for _, _, a in e.args) + ")"
         raise AssertionError(f"can't emit {k}")
 
@@ -1207,6 +1368,10 @@ def front_end(path, src):
         if not d.has_errors():  # a crash on a clean parse is a compiler bug
             raise
     return d, fns
+
+
+def render_string(v):
+    return '"' + escape_text(v) + '"'
 
 
 def show_value(v, ty):
@@ -1230,6 +1395,12 @@ def run_examples(exe, em, d):
             last = int(parts[1])
         elif parts[0] == "EXDONE":
             done = True
+        elif parts[0] == "EXFAILS":
+            s = em.examples[int(parts[1])]
+            l, r = (render_string(bytes.fromhex(x).decode("utf-8", "replace") if x != "-" else "")
+                    for x in parts[2:4])
+            d.error("example-failed", f"example is false: `{render(s.expr.left)}` is {l}, expected {r}",
+                    s.tok.line, s.tok.col, len("example"))
         elif parts[0] == "EXFAIL":
             s = em.examples[int(parts[1])]
             if len(parts) == 4:

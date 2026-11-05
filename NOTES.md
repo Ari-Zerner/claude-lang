@@ -42,16 +42,21 @@ design and its decisions (D1...).
   opener's indentation ("add `end if` above line 11 (`i = i + 1`)"). Indentation is still not
   significant; it's just evidence for the hint. `elif` now gets a concrete fix line too.
   `tests/run.py` supports `# fix-mentions:` lines; 10 tests.
+- 2026-11-05 (night 1, step 6): decided bigger-program trials are premature, since without strings
+  or data structures a 100-line program mostly measures what's missing. Added **strings (D18)**:
+  `String`, double-quoted literals with escapes, `{expr}` interpolation, which also replaces
+  concatenation (no string `+`), `==`/`!=`, and `print` of strings. Examples that compare strings
+  report both values. Hints for `'single quotes'`, `str`, `"a" + b`, nested strings and bad
+  escapes. Strings are never freed yet. SPEC.md is now ~1.4k tokens; 13 tests. The table trial
+  task now has an exact answer, and Haiku and Sonnet both got it on the first try.
 
 ## Next step
-The trials keep coming back perfect, so small programs aren't where the hard part is. Next:
-1. **Bigger programs** (~100+ lines, several interacting functions, written over more than one
-   step), where locality (D2, D4, D17) should matter more, and the error rate is high enough to
-   learn from. Also, a *wrong-but-compiles* trial: does a model given a program with a subtle
-   logic bug and a failing `example` find it?
-2. Language: strings and printing without a newline are the most-felt gap (the table task);
-   `break` second. Probably strings first, which forces the memory-management decision.
-3. Holes (D9) and the formatter (D12).
+1. String basics people will reach for at once: `length(s)`, and probably `int_to_string` isn't
+   needed thanks to interpolation. Parsing (`parse_int(s) -> Result`) needs D7's Result first.
+2. **Lists**, with the memory decision (D18: value semantics + refcount/copy-on-write).
+   Then records (structs). These unlock the bigger-program trials.
+3. `break` (the flag-variable workaround works but is verbose).
+4. Bigger-program trials, a wrong-but-compiles trial, holes (D9), the formatter (D12).
 
 Known gaps: no `break`; the `.cl` extension clashes with OpenCL, so the name is still provisional.
 

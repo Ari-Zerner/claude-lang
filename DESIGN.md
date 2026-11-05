@@ -83,10 +83,17 @@ Claude differs from a human programmer in ways that matter for language design:
 - **D17. Names can't be reused within a function** (no shadowing), and an unused result of a call
   is an error (`let _ = f(x)` discards on purpose). Both are frequent sources of quiet bugs.
 
+- **D18. Strings: `String`, interpolation instead of `+`.** `String` matches `Int`/`Bool`'s
+  Swift-style names (and is what Claude writes by default). `"{a}{b}"` covers both formatting and
+  concatenation, so `+` keeps exactly one meaning (D5) and there's no `to_string` call to forget.
+  Strings are immutable. Memory: **planned value semantics** for every type (assigning or passing
+  never creates a shared, mutable alias; Claude reasons badly about aliasing), implemented with
+  reference counting and copy-on-write when lists arrive. Immutable values can't form cycles, so
+  refcounting would be exact. **v0 never frees strings**, which is fine for short programs.
+
 ## Open questions
 
-- Memory management: arena per call / refcounting / GC? For a first version: never free
-  (leak), which is fine for short programs. Decide before strings and lists get serious.
+- Memory management: leaning value semantics + refcounting (D18). Confirm before lists.
 - Generics: needed for `Result` and `List` at least. Built-in generic types only at first?
 - Mutation: immutable by default with `var` for mutable locals? Leaning yes.
 - Modules/imports: explicit, file = module, no wildcards. Details later.

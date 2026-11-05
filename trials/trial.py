@@ -52,7 +52,7 @@ HARD = [
     ("coins", "Print the number of different ways to make 100 cents from coins of 1, 5, 10, 25 and 50 "
      "cents (order doesn't matter).", "292\n"),
     ("table", "Print a multiplication table for 1 to 4: four lines, each with the four products "
-     "separated by spaces.", None),
+     "separated by single spaces.", "1 2 3 4\n2 4 6 8\n3 6 9 12\n4 8 12 16\n"),
 ]
 SETS = {"basic": BASIC, "hard": HARD}
 

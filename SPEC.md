@@ -19,7 +19,7 @@ fn gcd(a: Int, b: Int) -> Int
 end fn gcd
 
 fn main() uses io
-  print(gcd(a: 48, b: 36))
+  print("gcd = {gcd(a: 48, b: 36)}")
 end fn main
 ```
 
@@ -36,9 +36,22 @@ end fn main
 |---|---|
 | `Int` | 64-bit signed integer, e.g. `0`, `42`, `1_000_000`. Negative: `-5` |
 | `Bool` | `true`, `false` |
+| `String` | text in double quotes, e.g. `"Hello, {name}!"` |
 
-There are no other types yet: no strings, floats, lists, null. Nothing converts implicitly
+There are no other types yet: no floats, lists, records, null. Nothing converts implicitly
 (an `Int` is never used as a `Bool`).
+
+## Strings
+
+- Double quotes only, and a string ends on the line it starts. Escapes: `\n` `\t` `\\` `\"`
+  `\{` `\}`.
+- **Interpolation:** `{expr}` inside a string inserts the value of any `Int`, `Bool` or `String`
+  expression: `"{a} + {b} = {a + b}"`. A string literal can't appear inside `{...}`; put it in a
+  `let` first.
+- **There is no string `+`.** Join strings with interpolation: `"{first}{second}"`. To build a
+  string in a loop: `line = "{line} {x}"`.
+- `==` and `!=` compare strings. There are no other string operations yet (no length,
+  indexing or slicing).
 
 ## Functions
 
@@ -78,7 +91,7 @@ end fn name
 | `if` / `else if` / `else` / `end if` | conditions must be `Bool` |
 | `while cond` ... `end while` | loop. There is no `for`, `break` or `continue` yet |
 | `f(args)` | call a function for its effect |
-| `print(x)` | built in: prints an `Int` or `Bool` and a newline; needs `uses io` |
+| `print(x)` | built in: prints an `Int`, `Bool` or `String` and a newline; needs `uses io` |
 
 ```
 fn sign(x: Int) -> Int
