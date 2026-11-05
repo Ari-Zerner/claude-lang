@@ -13,19 +13,25 @@ design and its decisions (D1...).
   other-language hints (D15), checked overflow and division (D16), and `--json` diagnostics.
   `tests/run.py`: 8 tests (2 running programs, 6 error files), all passing. Builds take ~0.15 s.
   Added DESIGN D13-D17 and a README.
+- 2026-11-05 (night 1, step 3): wrote SPEC.md (~1.2k tokens, well under D11's 4k budget; every
+  complete program in it is now a test). Built `trials/trial.py`: it gives a fresh headless
+  `claude -p` (no tools) only SPEC.md and a task, compiles the answer, and on failure hands back
+  the diagnostics for one fix. First run (Sonnet, 6 small numeric tasks): **6/6 compiled and
+  printed the right answer on the first try**, and Sonnet wrote `example` lines in nearly every
+  function unprompted (26 lines across 6 programs). Results in `trials/results/`. That's
+  encouraging, but the tasks were too easy to find weaknesses, and the fix path never ran.
 
 ## Next step
-Candidates, roughly in order:
-1. Write `SPEC.md` (D11) now, while the language is small: the whole language in under ~4k
-   tokens, written to be pasted into a prompt. Then test it: give a fresh `claude -p` only
-   SPEC.md and a small task, and see what it gets wrong. Those mistakes are the best design
-   input there is (cheap: one headless run, Sonnet is fine).
+1. Harder trial tasks that push on what's missing or easy to get wrong, to see what Claude reaches
+   for: early exit from a loop (no `break`), nested loops, mutual recursion, a task that tempts
+   string output (a table), a task where named-argument order matters (three or more parameters),
+   and helper functions that print (tests `uses io`). Then fix the spec or language based on what
+   breaks. Also try Haiku: a weaker model finds spec gaps sooner.
 2. Holes (D9).
 3. Strings, then lists (decide memory management first: see the open question).
 4. A formatter (D12).
 
-Known gaps: no `break`; `%` follows C (the sign of the result follows the dividend), which isn't
-written down yet; the `.cl` extension clashes with OpenCL, so the name is still provisional.
+Known gaps: no `break`; the `.cl` extension clashes with OpenCL, so the name is still provisional.
 
 ## Repo
 Public: https://github.com/Ari-Zerner/claude-lang (Ari, 2026-11-05). Push after each commit.

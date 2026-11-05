@@ -35,5 +35,20 @@ for f in sorted(glob.glob(os.path.join(HERE, "err", "*.cl"))):
         failed += 1
         print(f"FAIL {os.path.relpath(f, HERE)}: want {want}, got {got} (exit {r.returncode})")
         print(subprocess.run([sys.executable, CLC, "check", f], capture_output=True, text=True).stderr)
+# Every complete program in SPEC.md (a code block with `fn main`) must build and pass its examples.
+import tempfile
+spec = open(os.path.join(HERE, "..", "SPEC.md")).read()
+for i, block in enumerate(re.findall(r"```\n(.*?)```", spec, re.S)):
+    if "fn main" not in block:
+        continue
+    with tempfile.NamedTemporaryFile("w", suffix=".cl", delete=False) as fh:
+        fh.write(block)
+    r = subprocess.run([sys.executable, CLC, "test", fh.name], capture_output=True, text=True)
+    os.unlink(fh.name)
+    if r.returncode == 0:
+        passed += 1
+    else:
+        failed += 1
+        print(f"FAIL SPEC.md code block {i + 1}:\n{r.stderr}")
 print(f"{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)
