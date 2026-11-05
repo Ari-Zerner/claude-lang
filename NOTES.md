@@ -6,7 +6,7 @@ design and its decisions (D1...).
 ## Log
 - 2026-11-05 (night 1, step 1): wrote DESIGN.md with design principles, decisions D1-D12 and
   open questions. No code yet.
-- 2026-11-05 (night 1, step 2): first working compiler, `clc.py` (~1000 lines, Python -> C ->
+- 2026-11-05 (night 1, step 2): first working compiler, `clc.py` (~1300 lines, Python -> C ->
   gcc). It covers Int/Bool, `let`/`var`, assignment, `if`/`else if`/`else`, `while`, `return`,
   `print`, calls with named arguments, `uses io` effect checking, examples run on every build
   (D8), named closers with recovery (D2), D6 precedence errors, word error codes (D14),
