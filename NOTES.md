@@ -20,16 +20,30 @@ design and its decisions (D1...).
   printed the right answer on the first try**, and Sonnet wrote `example` lines in nearly every
   function unprompted (26 lines across 6 programs). Results in `trials/results/`. That's
   encouraging, but the tasks were too easy to find weaknesses, and the fix path never ran.
+- 2026-11-05 (night 1, step 4): harder trial set (`--set hard`: early exit with no `break`,
+  mutual recursion, a 3-parameter function, a printing helper, coin change with no lists, a table
+  that can't be printed on one line). **Sonnet and Haiku both got all 7 checkable tasks right on
+  the first try**, so across three runs it's 20/20, with zero compile errors. Observations:
+  - Missing `break`: both used a `found` flag in the loop condition. It works, but it's verbose.
+  - Missing strings: Sonnet noticed the table can't go on one line, said so in a comment and
+    printed one number per line. Neither invented string syntax, so the spec's line "if it isn't
+    described here, it doesn't exist" works.
+  - Missing lists: Haiku did coin change with four nested loops.
+  - Models name single arguments too (`divisors(t: triangular(n: n))`), which the spec allows.
 
 ## Next step
-1. Harder trial tasks that push on what's missing or easy to get wrong, to see what Claude reaches
-   for: early exit from a loop (no `break`), nested loops, mutual recursion, a task that tempts
-   string output (a table), a task where named-argument order matters (three or more parameters),
-   and helper functions that print (tests `uses io`). Then fix the spec or language based on what
-   breaks. Also try Haiku: a weaker model finds spec gaps sooner.
-2. Holes (D9).
-3. Strings, then lists (decide memory management first: see the open question).
-4. A formatter (D12).
+Writing small programs from the spec is evidently easy, so the trials should move to the parts
+that haven't been tested:
+1. **Fix-loop trial (tests D10, the diagnostics).** Take the correct trial programs, inject the
+   typical mistakes (swap named arguments, drop an `end if`, `&&`, a missing `uses io`, reusing a
+   name, `elif`, an off-by-one caught by an example) and check whether a fresh model given only
+   SPEC.md plus the compiler output fixes it in one go. Compare against a variant that gets only
+   the bare first line of each error (no source line or `fix:`) to see whether the extra text earns
+   its tokens.
+2. **Bigger programs** (~100+ lines, several interacting functions), where the locality claims
+   (D2, D4, D17) should matter more.
+3. Language: strings and printing without a newline are the most-felt gap; `break` second.
+   Holes (D9) and the formatter (D12) after that.
 
 Known gaps: no `break`; the `.cl` extension clashes with OpenCL, so the name is still provisional.
 

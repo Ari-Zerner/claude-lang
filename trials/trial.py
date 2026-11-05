@@ -5,7 +5,7 @@ For each task: ask a headless `claude -p` (no tools) for a program, compile it w
 and if it fails, hand back the diagnostics once and ask for a fixed version. Every attempt,
 diagnostic and output is written to trials/results/<run>.md; those mistakes are design input.
 
-  python3 trials/trial.py [--model sonnet] [--only NAME ...]
+  python3 trials/trial.py [--set basic|hard] [--model sonnet] [--only NAME ...]
 """
 import argparse
 import datetime
@@ -20,7 +20,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 CLC = os.path.join(ROOT, "clc.py")
 
-TASKS = [
+BASIC = [
     ("fib", "Print the first 15 Fibonacci numbers, starting 0, 1, one per line.",
      "".join(f"{x}\n" for x in [0, 1, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233, 377])),
     ("primes", "Print every prime number below 50, one per line, in increasing order.",
@@ -33,6 +33,27 @@ TASKS = [
     ("perfect", "A perfect number equals the sum of its proper divisors. Print whether 28 is perfect, "
      "then whether 12 is perfect (one result per line).", "true\nfalse\n"),
 ]
+
+# Tasks that push on what's missing (no break, strings or lists) or easy to get wrong. A
+# want of None means there's no single right output; the result is recorded for reading.
+HARD = [
+    ("first-big-fib", "Print the first Fibonacci number that has more than 10 decimal digits.",
+     "12586269025\n"),
+    ("triangle", "The n-th triangular number is 1 + 2 + ... + n. Print the smallest n whose triangular "
+     "number has more than 50 divisors.", "224\n"),
+    ("next-prime", "Print the first prime number greater than 10000.", "10007\n"),
+    ("even-odd", "Write two mutually recursive functions is_even and is_odd that don't use `%`, `/` "
+     "or `*`. Print is_even(10), then is_even(7).", "true\nfalse\n"),
+    ("clamp", "Write a function clamp that takes a value, a lower bound and an upper bound. Print the "
+     "result of clamping 15, then -5, then 5, each to the range 0 to 10.", "10\n0\n5\n"),
+    ("countdown", "Write a function that prints the numbers from n down to 1, one per line. From main, "
+     "call it with 5 and then print 0.", "5\n4\n3\n2\n1\n0\n"),
+    ("coins", "Print the number of different ways to make 100 cents from coins of 1, 5, 10, 25 and 50 "
+     "cents (order doesn't matter).", "292\n"),
+    ("table", "Print a multiplication table for 1 to 4: four lines, each with the four products "
+     "separated by spaces.", None),
+]
+SETS = {"basic": BASIC, "hard": HARD}
 
 PROMPT = """Below is the complete specification of a new programming language, claude-lang.
 You have never seen it before; rely only on this spec.
@@ -102,14 +123,15 @@ def attempt(code, tmp):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", default="sonnet")
+    ap.add_argument("--set", choices=sorted(SETS), default="basic")
     ap.add_argument("--only", nargs="*")
     args = ap.parse_args()
     spec = open(os.path.join(ROOT, "SPEC.md")).read()
     stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d-%H%M")
     os.makedirs(os.path.join(HERE, "results"), exist_ok=True)
-    out_path = os.path.join(HERE, "results", f"{stamp}-{args.model}.md")
-    rows, log = [], [f"# Spec trial {stamp} ({args.model})\n"]
-    for name, task, want in TASKS:
+    out_path = os.path.join(HERE, "results", f"{stamp}-{args.set}-{args.model}.md")
+    rows, log = [], [f"# Spec trial {stamp} ({args.set} tasks, {args.model})\n"]
+    for name, task, want in SETS[args.set]:
         if args.only and name not in args.only:
             continue
         log.append(f"## {name}\n\nTask: {task}\n")
@@ -118,6 +140,13 @@ def main():
             result = "fail"
             for n in (1, 2):
                 rc, out, err = attempt(code, tmp)
+                if want is None and rc == 0:  # no single right answer: record it and stop
+                    log.append(f"### attempt {n}: compiled (open-ended task)\n\n```cl\n{code}```\n"
+                               f"Output:\n```\n{out}```\n")
+                    if err.strip():
+                        log.append(f"Compiler:\n```\n{err.strip()}\n```\n")
+                    result = "compiled (open-ended)" + (" after one fix" if n == 2 else "")
+                    break
                 ok = rc == 0 and out == want
                 log.append(f"### attempt {n}: {'OK' if ok else 'exit ' + str(rc)}\n\n```cl\n{code}```\n")
                 if err.strip():
@@ -129,6 +158,7 @@ def main():
                     break
                 if n == 1:
                     diags = err.strip() or f"(it compiled, but printed:\n{out}\ninstead of:\n{want})"
+                    log.append("_Sent the diagnostics back for a fix._\n")
                     code = extract(claude(FIX_PROMPT.format(spec=spec, task=task, code=code, diags=diags),
                                           args.model))
         rows.append((name, result))
