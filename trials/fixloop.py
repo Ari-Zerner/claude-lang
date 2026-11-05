@@ -124,7 +124,7 @@ CASES = [
     ("unnamed", "gcd", [("print(gcd(a: 48, b: 36))", "print(gcd(48, 36))")], "unnamed-arg"),
     # Was a trap until 2026-11-05: the `fix:` said to put `end if` above `end while`, which would
     # pull `i = i + 1` into the `if` and loop forever. Now the fix uses indentation and says
-    # "above line 10 (`i = i + 1`)".
+    # "above line 9 (`i = i + 1`)".
     ("lost-end-if", "divsum", [("      total = total + i\n    end if\n", "      total = total + i\n")],
      "closer-mismatch"),
     ("ampersands", "divsum", [("  return divisor_sum(n) == n", "  return n > 1 && divisor_sum(n) == n")],
