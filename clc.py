@@ -403,7 +403,7 @@ class Parser:
             t = self.peek()
             if t.kind == "eof":
                 self.d.error("unclosed-block", f"`{opener(kind, name)}` (line {line}) is never closed",
-                             t.line, t.col, 1, f"add `{closer(kind, name)}`")
+                             t.line, t.col, 1, self.closer_fix(kind, name, line, t.line))
                 return stmts, "implicit", t
             if t.kind == "kw" and t.text == "end":
                 how = self.closer_line()
@@ -433,7 +433,7 @@ class Parser:
                 continue
             if t.kind == "kw" and t.text == "fn":
                 self.d.error("unclosed-block", f"`{opener(kind, name)}` (line {line}) is never closed before the "
-                             "next `fn`", t.line, t.col, 2, f"add `{closer(kind, name)}` above this line")
+                             "next `fn`", t.line, t.col, 2, self.closer_fix(kind, name, line, t.line))
                 return stmts, "implicit", t
             try:
                 s = self.statement()
@@ -441,6 +441,24 @@ class Parser:
                     stmts.append(s)
             except ParseError:
                 self.skip_line()
+
+    def closer_fix(self, kind, name, open_line, here):
+        """Where does the missing closer go? Indentation has no meaning to the compiler, but it is
+        good evidence: the first line indented no deeper than the opener is probably outside it."""
+        what = f"`{closer(kind, name)}`"
+        lines = self.d.lines
+        indent = lambda ln: len(lines[ln - 1]) - len(lines[ln - 1].lstrip())
+        if 1 <= open_line <= len(lines):
+            for ln in range(open_line + 1, min(here, len(lines) + 1)):
+                text = lines[ln - 1].strip()
+                if not text or text.startswith("#"):
+                    continue
+                if indent(ln) <= indent(open_line):
+                    if kind == "if" and text.split()[0] == "else":
+                        continue
+                    return (f"add {what} above line {ln} (`{text}`), where the indentation goes back to the "
+                            f"`{opener(kind, name)}` on line {open_line}")
+        return f"add {what} above line {here}" if here <= len(lines) else f"add {what} at the end"
 
     def closer_line(self):
         start = self.i
@@ -473,7 +491,7 @@ class Parser:
         if any(b[0] == k for b in self.stack[:-1]):
             self.d.error("closer-mismatch", f"`end {k}` doesn't match the innermost open block, "
                          f"`{opener(kind, name)}` (line {line})", start_tok.line, start_tok.col,
-                         len(f"end {k}"), f"add `{closer(kind, name)}` above this line")
+                         len(f"end {k}"), self.closer_fix(kind, name, line, start_tok.line))
             self.i = start  # leave the closer for the outer block
             return "outer"
         self.d.error("stray-closer", f"`end {k}` doesn't close anything: no `{k}` is open (the innermost open "
@@ -505,7 +523,11 @@ class Parser:
                 return Node("example", t, expr=e)
         if t.kind == "name":
             if t.text in STMT_HINTS:
-                self.fail("syntax", f"`{t.text}` isn't a keyword; {STMT_HINTS[t.text]}", t)
+                fix = None
+                if t.text in ("elif", "elsif", "elseif"):
+                    src = self.d.lines[t.line - 1]
+                    fix = f"`{(src[:t.col - 1] + 'else if' + src[t.col - 1 + len(t.text):]).strip()}`"
+                self.fail("syntax", f"`{t.text}` isn't a keyword; {STMT_HINTS[t.text]}", t, fix)
             if t.text in FN_WORDS:
                 self.fail("syntax", "functions can't be nested", t)
             if self.at_op("=", 1):

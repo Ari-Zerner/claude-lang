@@ -12,6 +12,7 @@ import datetime
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import tempfile
@@ -116,8 +117,16 @@ def attempt(code, tmp):
     path = os.path.join(tmp, "prog.cl")
     with open(path, "w") as fh:
         fh.write(code)
-    r = subprocess.run([sys.executable, CLC, "run", path], capture_output=True, text=True, timeout=60, cwd=tmp)
-    return r.returncode, r.stdout, r.stderr.replace(tmp + "/", "")
+    # Own process group, so a program that never ends is killed along with clc.
+    p = subprocess.Popen([sys.executable, CLC, "run", path], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                         text=True, cwd=tmp, start_new_session=True)
+    try:
+        out, err = p.communicate(timeout=20)
+    except subprocess.TimeoutExpired:
+        os.killpg(p.pid, signal.SIGKILL)
+        out, err = p.communicate()
+        return 124, out, "(the program was still running after 20 s and was stopped)"
+    return p.returncode, out, err.replace(tmp + "/", "")
 
 
 def main():

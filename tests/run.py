@@ -29,6 +29,11 @@ for f in sorted(glob.glob(os.path.join(HERE, "err", "*.cl"))):
     except json.JSONDecodeError:
         diags = None
     got = None if diags is None else sorted(d["code"] for d in diags if d["severity"] == "error")
+    mentions = re.findall(r"^#\s*fix-mentions:\s*(.*)$", open(f).read(), re.M)
+    fixes = " ".join(d.get("fix", "") for d in diags or [])
+    missing = [m for m in mentions if m not in fixes]
+    if missing:
+        got = f"{got}, but no fix mentions {missing}"
     if r.returncode == 1 and got == want:
         passed += 1
     else:

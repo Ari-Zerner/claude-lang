@@ -30,20 +30,28 @@ design and its decisions (D1...).
     described here, it doesn't exist" works.
   - Missing lists: Haiku did coin change with four nested loops.
   - Models name single arguments too (`divisors(t: triangular(n: n))`), which the spec allows.
+- 2026-11-05 (night 1, step 5): fix-loop trial (`trials/fixloop.py`): 11 typical mistakes planted
+  in correct programs (swapped or unnamed arguments, a lost `end if`, `&&`, shadowing,
+  `not (n % i)`, a missing `uses io`, `let` for a variable, `elif`, an off-by-one caught by an
+  example, a missing return type). **Haiku and Sonnet fixed all 11 in one go, with either the full
+  diagnostics or only their first lines (44/44).** So for mistakes this local, the message line
+  alone is enough; the source line and `fix:` didn't make a measurable difference.
+  The lost-`end if` case was a trap: the compiler's `fix:` said to put `end if` above `end while`,
+  which would have looped forever. Both models ignored it and used the indentation. The compiler
+  now does the same: a missing closer's fix points at the first line that goes back to the
+  opener's indentation ("add `end if` above line 11 (`i = i + 1`)"). Indentation is still not
+  significant; it's just evidence for the hint. `elif` now gets a concrete fix line too.
+  `tests/run.py` supports `# fix-mentions:` lines; 10 tests.
 
 ## Next step
-Writing small programs from the spec is evidently easy, so the trials should move to the parts
-that haven't been tested:
-1. **Fix-loop trial (tests D10, the diagnostics).** Take the correct trial programs, inject the
-   typical mistakes (swap named arguments, drop an `end if`, `&&`, a missing `uses io`, reusing a
-   name, `elif`, an off-by-one caught by an example) and check whether a fresh model given only
-   SPEC.md plus the compiler output fixes it in one go. Compare against a variant that gets only
-   the bare first line of each error (no source line or `fix:`) to see whether the extra text earns
-   its tokens.
-2. **Bigger programs** (~100+ lines, several interacting functions), where the locality claims
-   (D2, D4, D17) should matter more.
-3. Language: strings and printing without a newline are the most-felt gap; `break` second.
-   Holes (D9) and the formatter (D12) after that.
+The trials keep coming back perfect, so small programs aren't where the hard part is. Next:
+1. **Bigger programs** (~100+ lines, several interacting functions, written over more than one
+   step), where locality (D2, D4, D17) should matter more, and the error rate is high enough to
+   learn from. Also, a *wrong-but-compiles* trial: does a model given a program with a subtle
+   logic bug and a failing `example` find it?
+2. Language: strings and printing without a newline are the most-felt gap (the table task);
+   `break` second. Probably strings first, which forces the memory-management decision.
+3. Holes (D9) and the formatter (D12).
 
 Known gaps: no `break`; the `.cl` extension clashes with OpenCL, so the name is still provisional.
 
