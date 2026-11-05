@@ -13,5 +13,8 @@ functions, `if`/`end if`, `return`, `print`, calls with named arguments, plus th
 named-closer check (D2) and diagnostics in the D10 format. Goal: `gcd` from DESIGN.md compiles and
 runs. Then examples-as-tests (D8).
 
+## Repo
+Public: https://github.com/Ari-Zerner/claude-lang (Ari, 2026-11-05). Push after each commit.
+
 ## How to build/test (once there is code)
 Run under a memory cap: `systemd-run --scope -q -p MemoryMax=400M -- python3 clc.py ...`.
