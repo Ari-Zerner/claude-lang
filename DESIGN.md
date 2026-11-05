@@ -46,9 +46,12 @@ Claude differs from a human programmer in ways that matter for language design:
   positional.
 - **D5. No implicit conversions, no operator overloading, no function overloading.** One name
   means one thing.
-- **D6. No operator precedence beyond the obvious:** mixing different binary operators needs
-  parentheses (`a + b * c` is an error; write `a + (b * c)`). `*` vs `+` is the one candidate
-  exception: *open*.
+- **D6. Conventional precedence, except where readers commonly slip.** Arithmetic binds tighter
+  than comparison, which binds tighter than `and`/`or`; Claude never gets those wrong, so
+  requiring parentheses there would be pure noise. These are errors, with the fix spelled out:
+  mixing `and` with `or`; chained comparisons (`a < b < c`); `/` or `%` followed by another
+  `*`/`/`/`%` (`a / b * c`); `not` in front of a comparison or arithmetic (`not a == b`).
+  (Revised 2026-11-05 while implementing; the first draft required parentheses for every mix.)
 - **D7. Errors are values** (`Result[T, E]`) with exhaustive `match`; no exceptions, no null.
   `?`-style early return is *open* (it's concise but hides control flow).
 - **D8. Examples are part of the function.** A function may carry `example` lines
@@ -65,6 +68,20 @@ Claude differs from a human programmer in ways that matter for language design:
   against the feature.
 - **D12. One canonical layout,** enforced by a formatter, so there is never a choice to make
   about how to lay code out.
+
+- **D13. One statement per line, no line continuation.** Newlines end statements and there are
+  no `;`. Every error is confined to its line, which makes recovery trivial and lets the
+  compiler report every error in one pass. Long lines are fine; Claude doesn't mind them.
+- **D14. Error codes are words, not numbers** (`closer-mismatch`, `arg-order`), so a code
+  means something on its own in a transcript.
+- **D15. Hints for other languages' habits.** `&&`, `{`, `;`, `elif`, `def`, `println`, `True`,
+  `endif`... each get a targeted "write X instead" rather than a generic syntax error, because
+  carrying over another language's habits is the most likely mistake when writing a language
+  that isn't in the training data.
+- **D16. Runtime errors are checked, never undefined:** integer overflow and division by zero
+  stop the program with `file:line:col: runtime error: ...` (exit code 70).
+- **D17. Names can't be reused within a function** (no shadowing), and an unused result of a call
+  is an error (`let _ = f(x)` discards on purpose). Both are frequent sources of quiet bugs.
 
 ## Open questions
 
