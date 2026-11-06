@@ -86,14 +86,27 @@ design and its decisions (D1...).
   `1 to n` (offers both readings), `0..n`, C-style headers, `for i, x in`, `for x in n`. 19 tests;
   SPEC ~1.8k tokens.
 
+- 2026-11-06 (night 2, step 4): **list trial rerun with `for` in the spec**
+  (`2026-11-06-1203-lists-haiku`, `-1204-lists-sonnet`): **both 11/11 first try** (was Haiku 11/11,
+  Sonnet 9/11). Final programs are **18% shorter** (Haiku 242 -> 197 non-comment lines, Sonnet
+  226 -> 185); the biggest drops are counting loops (fib-list 27 -> 12, join 16 -> 11). Each
+  model wrote 11 `for` loops (`until` 5, `reversed` 1; `through` and `break` unused) and kept 5-6
+  `while`s, all of them while-shaped: a sieve stepping by `p`, the two-pointer merge, the
+  insertion-sort shift. A step option would have saved only the sieve, so "use `while` for other
+  steps" stays. **Nobody wrote `range(`, `to` or `..`**, so those diagnostics remain a safety net.
+  Sonnet named the arguments in every `example` line this time, including the `contains`/`join`
+  calls it missed before, so the SPEC sentence added in step 2 worked.
+
 ## Next step
-1. Rerun the list trial with `for` in the spec and compare program length against the
-   2026-11-06-1100/1102 runs (and whether anyone reaches for `to`, `range` or `..`).
-3. Records (structs), then bigger-program trials, a wrong-but-compiles trial, holes (D9), the
+1. Records (structs): a `type Point = record x: Int, y: Int`-style declaration (decide the syntax
+   in DESIGN.md first; value semantics like lists, field update `p.x = 3` one level at a time,
+   construction with named fields as D4 would suggest), then a small trial that baits
+   other languages' habits (classes, methods, `new`, positional construction).
+2. Bigger-program trials (a 100+ line task), a wrong-but-compiles trial, holes (D9), the
    formatter (D12). Parsing (`parse_int(s) -> Result`) needs D7's Result.
 
-Known gaps: no `break`/`for`; no list concatenation; nothing is freed; the `.cl` extension
-clashes with OpenCL, so the name is still provisional.
+Known gaps: no list concatenation; no string iteration or indexing; nothing is freed; the `.cl`
+extension clashes with OpenCL, so the name is still provisional.
 
 ## Repo
 Public: https://github.com/Ari-Zerner/claude-lang (Ari, 2026-11-05). Push after each commit.
