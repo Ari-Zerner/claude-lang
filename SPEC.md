@@ -37,21 +37,60 @@ end fn main
 | `Int` | 64-bit signed integer, e.g. `0`, `42`, `1_000_000`. Negative: `-5` |
 | `Bool` | `true`, `false` |
 | `String` | text in double quotes, e.g. `"Hello, {name}!"` |
+| `List[T]` | a list of `T`s, e.g. `[1, 2, 3]` is `List[Int]`; `List[List[String]]` nests |
 
-There are no other types yet: no floats, lists, records, null. Nothing converts implicitly
+There are no other types yet: no floats, records, maps, null. Nothing converts implicitly
 (an `Int` is never used as a `Bool`).
 
 ## Strings
 
 - Double quotes only, and a string ends on the line it starts. Escapes: `\n` `\t` `\\` `\"`
   `\{` `\}`.
-- **Interpolation:** `{expr}` inside a string inserts the value of any `Int`, `Bool` or `String`
-  expression: `"{a} + {b} = {a + b}"`. A string literal can't appear inside `{...}`; put it in a
+- **Interpolation:** `{expr}` inside a string inserts the value of any expression:
+  `"{a} + {b} = {a + b}"`. A string literal can't appear inside `{...}`; put it in a
   `let` first.
 - **There is no string `+`.** Join strings with interpolation: `"{first}{second}"`. To build a
   string in a loop: `line = "{line} {x}"`.
-- `==` and `!=` compare strings. There are no other string operations yet (no length,
-  indexing or slicing).
+- `==` and `!=` compare strings; `length(s)` counts characters. There are no other string
+  operations yet (no indexing or slicing).
+
+## Lists
+
+- `[a, b, c]` makes a list; every item has the same type. An empty list needs its type
+  written: `var xs: List[Int] = []`.
+- `xs[i]` is the item at index `i`, **counting from 0**; the last is `xs[length(xs) - 1]`.
+  There's no negative indexing. An index out of range stops the program.
+- `length(xs)` is the number of items.
+- `append(list: xs, item: x)` **returns a new list** with `x` added; it doesn't change `xs`.
+  To grow a variable: `xs = append(list: xs, item: x)` (this is fast).
+- `repeat(item: 0, times: n)` is a list of `n` copies of `0`.
+- `xs[i] = x` changes one item of a `var` list. Only one level at a time: for a list of lists,
+  `var row = grid[i]`, `row[j] = x`, `grid[i] = row`.
+- **Lists are values, like `Int`s:** `var ys = xs` copies, so changing `ys` never changes
+  `xs`, and a function can't change a list it's given. (Copies are made only when needed.)
+- `==` compares items; `print` and `{xs}` show `[1, 2, 3]` (strings inside are quoted).
+- There are no methods (`xs.append`), no `+` on lists and no `for` loop yet: loop with `while`.
+
+```
+fn total(xs: List[Int]) -> Int
+  example total([1, 2, 3]) == 6
+  example total([]) == 0
+  var sum = 0
+  var i = 0
+  while i < length(xs)
+    sum = sum + xs[i]
+    i = i + 1
+  end while
+  return sum
+end fn total
+
+fn main() uses io
+  var xs: List[Int] = []
+  xs = append(list: xs, item: 4)
+  xs = append(list: xs, item: 5)
+  print("{xs} has total {total(xs)}")
+end fn main
+```
 
 ## Functions
 
@@ -91,7 +130,8 @@ end fn name
 | `if` / `else if` / `else` / `end if` | conditions must be `Bool` |
 | `while cond` ... `end while` | loop. There is no `for`, `break` or `continue` yet |
 | `f(args)` | call a function for its effect |
-| `print(x)` | built in: prints an `Int`, `Bool` or `String` and a newline; needs `uses io` |
+| `xs[i] = expr` | change one item of a `var` list |
+| `print(x)` | built in: prints any value and a newline; needs `uses io` |
 
 ```
 fn sign(x: Int) -> Int
@@ -130,8 +170,8 @@ differ:
 ## Errors
 
 The compiler reports every error at once as `file:line:col: error[code]: message`, with the
-source line and usually a `fix:` line. At run time, integer overflow and division by zero stop
-the program with `file:line:col: runtime error: ...` (exit code 70).
+source line and usually a `fix:` line. At run time, integer overflow, division by zero and a list index out of
+range stop the program with `file:line:col: runtime error: ...` (exit code 70).
 
 ## Running
 

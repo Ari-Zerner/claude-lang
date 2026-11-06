@@ -50,15 +50,27 @@ design and its decisions (D1...).
   escapes. Strings are never freed yet. SPEC.md is now ~1.4k tokens; 13 tests. The table trial
   task now has an exact answer, and Haiku and Sonnet both got it on the first try.
 
-## Next step
-1. String basics people will reach for at once: `length(s)`, and probably `int_to_string` isn't
-   needed thanks to interpolation. Parsing (`parse_int(s) -> Result`) needs D7's Result first.
-2. **Lists**, with the memory decision (D18: value semantics + refcount/copy-on-write).
-   Then records (structs). These unlock the bigger-program trials.
-3. `break` (the flag-variable workaround works but is verbose).
-4. Bigger-program trials, a wrong-but-compiles trial, holes (D9), the formatter (D12).
+- 2026-11-06 (night 2, step 1): **lists (D19)**. `List[T]` (nests), `[...]` literals, `xs[i]`
+  (0-based, bounds-checked with the length and last index in the message), `length` (lists and
+  strings, in characters), `append(list:, item:)` returning a new list, `repeat(item:, times:)`,
+  `xs[i] = v` on a `var`, `==`, and `print`/interpolation showing `[1, "a"]`-style values. Value
+  semantics via copy-on-write with a share count (never freed yet); `xs = append(list: xs, ...)`
+  compiles to an in-place push, so 1M appends + 1M sets take 0.27 s. Failing list examples show
+  both lists. Targeted errors for the habits: `xs.append(4)`, `append(xs, 4)` alone on a line,
+  `len`, `xs[-1]`, `[0] * n`, `xs + [4]`, `list[int]`/`Vec<Int>`/`Int[]`, `grid[i][j] = v`,
+  `1.5`. Also D20: a line with a lexical error reports only that error. 17 tests.
+  SPEC.md ~1.7k tokens.
 
-Known gaps: no `break`; the `.cl` extension clashes with OpenCL, so the name is still provisional.
+## Next step
+1. **Trial with list tasks** (`trials/trial.py`, a new `--set lists`): see what Haiku and Sonnet
+   reach for when they have lists (a `for` loop? methods? `+`?) and whether the D19 fixes land.
+2. `for` over a list or a range, and `break` (the flag-variable workaround is verbose). Decide
+   from what the trial shows.
+3. Records (structs), then bigger-program trials, a wrong-but-compiles trial, holes (D9), the
+   formatter (D12). Parsing (`parse_int(s) -> Result`) needs D7's Result.
+
+Known gaps: no `break`/`for`; no list concatenation; nothing is freed; the `.cl` extension
+clashes with OpenCL, so the name is still provisional.
 
 ## Repo
 Public: https://github.com/Ari-Zerner/claude-lang (Ari, 2026-11-05). Push after each commit.

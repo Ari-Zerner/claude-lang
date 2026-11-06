@@ -91,9 +91,35 @@ Claude differs from a human programmer in ways that matter for language design:
   reference counting and copy-on-write when lists arrive. Immutable values can't form cycles, so
   refcounting would be exact. **v0 never frees strings**, which is fine for short programs.
 
+- **D19. Lists: `List[T]`, value semantics, copy-on-write, 0-based.** (2026-11-06)
+  - *Values, not references.* `var ys = xs` copies, and a callee can't change a caller's list.
+    Aliasing bugs are exactly the far-away, non-local kind Claude handles worst (point 6), and it
+    matches how `Int` and `String` already behave, so there's one rule for every type.
+  - *Copy-on-write makes that cheap.* Each list carries a count of the variables and slots that
+    may refer to it; mutation copies only when the count is above 1. Arguments are borrowed
+    (parameters can't change; storing one anywhere bumps the count), a local returned is moved,
+    and `xs = append(list: xs, item: x)` is compiled to an in-place push. 1M appends plus 1M
+    `xs[i] = ...` with a function call in between: 0.27 s. Nothing is freed yet, so the count can
+    only over-count, which costs an extra copy but is never wrong. Lists can't contain themselves
+    (the types forbid it), so real refcounting later will be exact.
+  - *`append` returns a list instead of mutating.* That keeps mutation visible at the assignment,
+    and the Python habit `append(xs, 4)` on its own line is then an unused result, which D17
+    already rejects; the fix says `xs = append(list: xs, item: 4)`. `xs.append(4)` gets the same
+    fix from the lexer.
+  - *0-based*, because every language Claude knows best is; 1-based would invite systematic
+    off-by-one. No negative indexing (`xs[-1]` is a compile error with the `length(xs) - 1` fix),
+    and an out-of-range index names the length and the last valid index.
+  - *`xs[i] = v` only one level deep* for now; `grid[i][j] = v` gets the three-line rewrite.
+  - `List[T]` with square brackets: it's what Claude writes in Python type hints, and `<...>` would
+    collide with comparison. `list[int]`, `Vec<Int>`, `Int[]` all get the fix `List[...]`.
+  - No list `+` and no `concat` yet; `[0] * n` gets the fix `repeat(item: 0, times: n)`.
+- **D20. A line with a lexical error reports only that error.** (2026-11-06) Parser and checker
+  errors on the same line are almost always fallout from the bad character (`xs.append(4)` was
+  three errors, now one), and the fix-loop trial showed the first message is what gets used.
+
 ## Open questions
 
-- Memory management: leaning value semantics + refcounting (D18). Confirm before lists.
+- Memory management: value semantics with copy-on-write (D19); nothing is freed yet.
 - Generics: needed for `Result` and `List` at least. Built-in generic types only at first?
 - Mutation: immutable by default with `var` for mutable locals? Leaning yes.
 - Modules/imports: explicit, file = module, no wildcards. Details later.

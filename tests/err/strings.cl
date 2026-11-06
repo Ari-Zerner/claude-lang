@@ -1,4 +1,4 @@
-# expect: unknown-type bad-char unclosed-string syntax bad-escape empty-interpolation nested-string type-mismatch
+# expect: unknown-type bad-char unclosed-string bad-escape empty-interpolation nested-string type-mismatch
 # fix-mentions: `"hi"`
 # fix-mentions: interpolation
 fn greet(name: str) -> String

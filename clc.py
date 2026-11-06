@@ -45,10 +45,15 @@ class Diags:
         self.lines = src.split("\n")
         self.items = []
         self._seen = set()
+        self.lexing, self.lex_lines = False, set()
 
     def add(self, severity, code, msg, line, col, length=1, fix=None):
         key = (line, col, code)
         if key in self._seen:  # one report per spot; later ones are usually cascades
+            return
+        if self.lexing:
+            self.lex_lines.add(line)
+        elif line in self.lex_lines:  # a line with a lexical error gets only that: the rest is fallout
             return
         self._seen.add(key)
         self.items.append(Diag(severity, code, msg, line, col, max(1, length), fix))
@@ -94,7 +99,7 @@ KEYWORDS = {"fn", "end", "if", "else", "while", "return", "let", "var", "example
             "uses", "true", "false", "and", "or", "not"}
 BLOCK_KINDS = ("fn", "if", "while")
 TWO_CHAR_OPS = ("->", "==", "!=", "<=", ">=")
-ONE_CHAR_OPS = "+-*/%<>=(),:"
+ONE_CHAR_OPS = "+-*/%<>=(),:[]"
 CMP_OPS = ("==", "!=", "<", "<=", ">", ">=")
 ARITH_OPS = ("+", "-", "*", "/", "%")
 
@@ -103,7 +108,8 @@ CHAR_HINTS = {
     "{": _BRACES, "}": _BRACES,
     ";": "a statement ends at the end of its line; drop the `;`",
     "&&": "write `and`", "||": "write `or`", "!": "write `not`",
-    "[": "lists aren't implemented yet", "]": "lists aren't implemented yet",
+    ".": "there are no methods or fields: call a function instead, e.g. `length(xs)` or "
+         "`xs = append(list: xs, item: x)` (and there are no floats)",
     "'": "strings use double quotes: `\"...\"`",
 }
 STRING_ESCAPES = {"n": "\n", "t": "\t", "\\": "\\", '"': '"', "{": "{", "}": "}"}
@@ -123,13 +129,51 @@ def lex(src, d):
     """One statement per line (D13): every non-empty line ends with an `nl` token."""
     toks = []
     lines = src.split("\n")
+    d.lexing = True
     for lineno, line in enumerate(lines, 1):
         before = len(toks)
         lex_span(line, 0, len(line), lineno, d, toks)
         if len(toks) > before:
             toks.append(Tok("nl", "", lineno, len(line) + 1))
+    d.lexing = False
     toks.append(Tok("eof", "", len(lines), 1))
     return toks
+
+
+def lex_dot(line, i, n, lineno, d, toks):
+    """`.` is never valid. Catch the two usual reasons: a method call (`xs.append(4)`, `s.len()`) and a
+    float (`1.5`). Returns where to resume."""
+    j = i + 1
+    while j < n and (line[j].isalnum() or line[j] == "_"):
+        j += 1
+    m, prev = line[i + 1:j], (toks[-1] if toks else None)
+    if prev is not None and prev.kind == "int" and m.isdigit():
+        d.error("bad-char", "there are no floats yet; Int is the only number type", lineno, prev.col,
+                j - prev.col + 1)
+        return j
+    if not m or not (m[0].isalpha() or m[0] == "_") or prev is None:
+        d.error("bad-char", f"`.` isn't part of the language; {CHAR_HINTS['.']}", lineno, i + 1)
+        return i + 1
+    end, args = j, None
+    if line[j:j + 1] == "(":
+        depth, k = 0, j
+        while k < n:
+            depth += {"(": 1, ")": -1}.get(line[k], 0)
+            if depth == 0:
+                break
+            k += 1
+        if k < n:
+            end, args = k + 1, line[j + 1:k].strip()
+    obj = prev.text if prev.kind == "name" else None
+    fix = None
+    if obj and m in ("append", "push", "add", "push_back") and args:
+        fix = f"`{obj} = append(list: {obj}, item: {args})`"
+    elif obj and m in ("len", "length", "size", "count") and not args:
+        fix = f"`length({obj})`"
+    elif obj:
+        fix = f"call a function with `{obj}` as an argument instead"
+    d.error("method-call", f"`.{m}` doesn't exist: there are no methods or fields", lineno, i + 1, end - i, fix)
+    return end
 
 
 def lex_span(line, i, n, lineno, d, toks, in_interp=False):
@@ -185,6 +229,8 @@ def lex_span(line, i, n, lineno, d, toks, in_interp=False):
             d.error("bad-char", f"`!` isn't an operator here; {CHAR_HINTS['!']}", lineno, col, 1)
             toks.append(Tok("kw", "not", lineno, col))  # recover
             i += 1
+        elif c == ".":
+            i = lex_dot(line, i, n, lineno, d, toks)
         elif c in ONE_CHAR_OPS:
             toks.append(Tok("op", c, lineno, col))
             i += 1
@@ -280,6 +326,10 @@ def render(e):
         s = "-" + render(e.expr)
     elif k == "not":
         s = "not " + render(e.expr)
+    elif k == "list":
+        s = "[" + ", ".join(render(x) for x in e.items) + "]"
+    elif k == "index":
+        s = f"{render(e.base)}[{render(e.index)}]"
     else:
         s = "?"
     return f"({s})" if e.paren else s
@@ -314,6 +364,7 @@ def fold(operands, ops):
 # ------------------------------------------------------------------ parser
 
 TYPES = ("Int", "Bool", "String")
+LIST_WORDS = ("List", "list", "Vec", "vec", "Vector", "vector", "Array", "array", "Seq", "Sequence", "Slice")
 TYPE_HINTS = {"int": "Int", "i64": "Int", "i32": "Int", "Integer": "Int", "integer": "Int", "long": "Int",
               "bool": "Bool", "boolean": "Bool", "Boolean": "Bool",
               "str": "String", "Str": "String", "string": "String", "text": "String", "Text": "String"}
@@ -424,8 +475,38 @@ class Parser:
     def parse_type(self, ret=False):
         t = self.peek()
         if t.kind != "name":
-            self.fail("syntax", f"expected a type (Int, Bool or String), found {describe(t)}", t)
+            self.fail("syntax", f"expected a type (Int, Bool, String or List[...]), found {describe(t)}", t)
         self.next()
+        if t.text in LIST_WORDS or (t.text not in TYPES and (self.at_op("[") or self.at_op("<"))):
+            return self.list_type(t)
+        ty = self.simple_type(t, ret)
+        if ty and self.at_op("[") and self.at_op("]", 1):  # Int[] (Java/C#)
+            b = self.next()
+            self.next()
+            self.d.error("unknown-type", "list types are written `List[...]`", b.line, b.col, 2, f"`List[{ty}]`")
+            return f"List[{ty}]"
+        return ty
+
+    def list_type(self, t):
+        """`List[T]`, after the name; also recovers from `list[T]`, `Vec<T>`, `Array[T]`..."""
+        close = "]"
+        if self.at_op("<"):
+            close = ">"
+        elif not self.at_op("["):
+            self.d.error("unknown-type", "`List` needs an item type", t.line, t.col, len(t.text), "`List[Int]`")
+            return None
+        b = self.next()
+        inner = self.parse_type()
+        self.expect_op(close, f"to close `{t.text}{b.text}...`")
+        if t.text in LIST_WORDS and t.text != "List" or close == ">":
+            self.d.error("unknown-type", f"list types are written `List[...]`", t.line, t.col, len(t.text),
+                         f"`List[{inner or '...'}]`")
+        elif t.text not in LIST_WORDS:
+            self.d.error("unknown-type", f"unknown type `{t.text}`; the only type that takes `[...]` is `List`",
+                         t.line, t.col, len(t.text))
+        return f"List[{inner}]" if inner else None
+
+    def simple_type(self, t, ret):
         if t.text in TYPES:
             return t.text
         if t.text in NO_RETURN_TYPES:
@@ -433,9 +514,10 @@ class Parser:
             self.d.error("unknown-type", msg, t.line, t.col, len(t.text))
             return "Unit" if ret else None
         hint = TYPE_HINTS.get(t.text) or next(iter(difflib.get_close_matches(t.text, TYPES, 1)), None)
-        self.d.error("unknown-type", f"unknown type `{t.text}`; the types are Int, Bool and String", t.line, t.col,
+        self.d.error("unknown-type", f"unknown type `{t.text}`; the types are Int, Bool, String and List[...]",
+                     t.line, t.col,
                      len(t.text), f"write `{hint}`" if hint else None)
-        return None
+        return hint  # recover with the likely meaning, so one wrong name doesn't cascade
 
     def fn_decl(self):
         kw = self.next()
@@ -621,6 +703,14 @@ class Parser:
                 self.end_line()
                 return Node("assign", t, name=t.text, expr=e)
         e = self.expr()
+        if self.at_op("="):
+            eq = self.next()
+            if e.kind != "index":
+                self.fail("syntax", f"can't assign to `{render(e)}`; only a variable or a list item `xs[i]` can be "
+                          "assigned", eq)
+            v = self.expr()
+            self.end_line()
+            return Node("setindex", t, target=e, expr=v)
         self.end_line()
         return Node("exprstmt", t, expr=e)
 
@@ -773,7 +863,31 @@ class Parser:
         return self.primary()
 
     def primary(self):
+        e = self.atom()
+        while self.at_op("["):
+            b = self.next()
+            i = self.expr()
+            self.expect_op("]", "to close the index")
+            n = Node("index", b, base=e, index=i)
+            n.start = e.start
+            e = n
+        return e
+
+    def atom(self):
         t = self.peek()
+        if t.kind == "op" and t.text == "[":
+            self.next()
+            items = []
+            if not self.at_op("]"):
+                while True:
+                    items.append(self.expr())
+                    if not self.at_op(","):
+                        break
+                    self.next()
+                    if self.at_op("]"):
+                        break  # trailing comma
+            self.expect_op("]", "to close the list")
+            return Node("list", t, items=items)
         if t.kind == "int":
             self.next()
             return Node("int", t, value=int(t.text))
@@ -836,14 +950,26 @@ class Parser:
 
 CALL_HINTS = {n: "the output function is `print`" for n in
               ("println", "printf", "puts", "echo", "write", "writeln", "console", "log", "display")}
+CALL_HINTS.update({n: "write `length(xs)`" for n in ("len", "size", "count", "len_of", "length_of")})
+CALL_HINTS.update({n: "write `xs = append(list: xs, item: x)`" for n in ("push", "add", "push_back", "insert")})
+CALL_HINTS.update({n: "write `repeat(item: 0, times: n)`" for n in ("fill", "filled", "make", "replicate", "vec")})
+BUILTINS = {"print": None, "length": None, "append": ["list", "item"], "repeat": ["item", "times"]}
+
+
+def is_list(t):
+    return bool(t) and t.startswith("List[")
+
+
+def elem(t):
+    return t[5:-1] if is_list(t) else None
 NAME_HINTS = {"True": "write `true`", "False": "write `false`", "TRUE": "write `true`",
               "FALSE": "write `false`", "null": "there's no null", "nil": "there's no null",
               "None": "there's no null"}
 
 
 class Var:
-    def __init__(self, ty, mutable, line):
-        self.ty, self.mutable, self.line = ty, mutable, line
+    def __init__(self, ty, mutable, line, param=False):
+        self.ty, self.mutable, self.line, self.param = ty, mutable, line, param
 
 
 def returns(stmts):
@@ -872,8 +998,8 @@ class Checker:
         for f in fns:
             if f.name == "?":
                 continue
-            if f.name == "print":
-                self.err("reserved-name", "`print` is built in and can't be redefined", f.name_tok)
+            if f.name in BUILTINS:
+                self.err("reserved-name", f"`{f.name}` is built in and can't be redefined", f.name_tok)
             elif f.name in self.fns:
                 self.err("duplicate-fn", f"`fn {f.name}` is already defined on line {self.fns[f.name].tok.line}",
                          f.name_tok)
@@ -903,7 +1029,7 @@ class Checker:
         for pn, pt, ptok in f.params:
             if pn in self.scopes[0]:
                 self.err("duplicate-name", f"parameter `{pn}` appears twice", ptok)
-            self.scopes[0][pn] = Var(pt, False, ptok.line)
+            self.scopes[0][pn] = Var(pt, False, ptok.line, param=True)
         seen_body = False
         for s in f.body:
             if s.kind != "example":
@@ -958,7 +1084,7 @@ class Checker:
                 self.err_at("not-bool", "an example must be a Bool expression, usually `f(...) == expected`",
                             s.expr)
         elif k == "let":
-            t = self.expr(s.expr)
+            t = self.expr(s.expr, want=s.ann)
             if t == "Unit":
                 self.err_at("unit-value", f"`{render(s.expr)}` returns nothing, so there's no value to store",
                             s.expr)
@@ -980,14 +1106,13 @@ class Checker:
                 self.scopes[-1][s.name] = Var(ty, s.mutable, s.tok.line)
         elif k == "assign":
             v = self.lookup(s.name)
-            t = self.expr(s.expr)
+            t = self.expr(s.expr, want=v.ty if v else None)
             if v is None:
                 self.unknown_name(s.tok, fix=f"declare it first: `var {s.name} = ...`")
-            elif not v.mutable:
-                self.err("assign-to-let", f"`{s.name}` was declared with `let` (line {v.line}), so it can't change",
-                         s.tok, f"declare it with `var {s.name} = ...` on line {v.line}")
-            elif v.ty and t and v.ty != t:
+            elif self.check_mutable(s.name, v, s.tok) and v.ty and t and v.ty != t:
                 self.err_at("type-mismatch", f"`{s.name}` is {v.ty}, but the value is {t}", s.expr)
+        elif k == "setindex":
+            self.setindex(s)
         elif k == "return":
             ret = self.cur.ret
             if s.expr is None:
@@ -995,7 +1120,7 @@ class Checker:
                     self.err("missing-return-value", f"`fn {self.cur.name}` returns {ret}; give `return` a value",
                              s.tok)
             else:
-                t = self.expr(s.expr)
+                t = self.expr(s.expr, want=ret)
                 if ret == "Unit":
                     self.err("unexpected-return-value", f"`fn {self.cur.name}` has no return type, so `return` "
                              "takes no value", s.tok, f"add `-> {t}` to the signature, or write plain `return`")
@@ -1015,9 +1140,71 @@ class Checker:
             t = self.expr(e)
             if e.kind != "call":
                 self.err_at("useless-expr", "this line computes a value and throws it away", e)
+            elif e.name == "append" and len(e.args) == 2:
+                lst, item = (a for _, _, a in e.args)
+                if [n for n, _, _ in e.args] == ["item", "list"]:
+                    lst, item = item, lst
+                fix = (f"`{render(lst)} = append(list: {render(lst)}, item: {render(item)})`" if lst.kind == "name"
+                       else None)
+                self.err_at("unused-result", "`append` returns a new list; it doesn't change the one you pass", e,
+                            fix)
             elif t not in ("Unit", None):
                 self.err_at("unused-result", f"the result of `{render(e)}` ({t}) is never used", e,
                             f"`let _ = {render(e)}` if you mean to discard it")
+
+    def check_mutable(self, name, v, tok):
+        if v.param:
+            self.err("assign-to-param", f"`{name}` is a parameter, and parameters can't change", tok,
+                     f"copy it into a variable first: `var my_{name} = {name}`")
+            return False
+        if not v.mutable:
+            self.err("assign-to-let", f"`{name}` was declared with `let` (line {v.line}), so it can't change",
+                     tok, f"declare it with `var {name} = ...` on line {v.line}")
+            return False
+        return True
+
+    def setindex(self, s):
+        tgt = s.target
+        base = tgt.base
+        bt = self.expr(base) if base.kind != "name" else None
+        if base.kind == "index":
+            # grid[i][j] = v: one level at a time, since each level is its own value (D19).
+            outer = base.base
+            self.err_at("nested-assign", "only one level of indexing can be assigned at a time", tgt,
+                        f"`var row = {render(base)}`, then `row[{render(tgt.index)}] = {render(s.expr)}`, "
+                        f"then `{render(base)} = row`")
+            self.expr(tgt.index)
+            self.expr(s.expr)
+            return
+        if base.kind != "name":
+            self.err_at("syntax", f"can't assign into `{render(base)}`; assign to a variable's item: `xs[i] = v`",
+                        base)
+            return
+        v = self.lookup(base.name)
+        it = self.expr(tgt.index)
+        if v is None:
+            self.unknown_name(base.tok)
+            self.expr(s.expr)
+            return
+        base.ty = v.ty
+        ok = self.check_mutable(base.name, v, base.tok)
+        et = elem(v.ty)
+        t = self.expr(s.expr, want=et)
+        if v.ty and not is_list(v.ty):
+            self.err_at("not-a-list", f"`{base.name}` is {v.ty}, not a list, so it can't be indexed", base)
+            return
+        self.need(tgt.index, it, "Int", "[...]")
+        self.no_negative_index(tgt)
+        if ok and et and t and t != et:
+            self.err_at("type-mismatch", f"`{base.name}` is {v.ty}, so its items are {et}, but the value is {t}",
+                        s.expr)
+
+    def no_negative_index(self, e):
+        i = e.index
+        if i.kind == "neg" and i.expr.kind == "int":
+            b = render(e.base)
+            self.err_at("negative-index", "there's no negative indexing; indexes run from 0 to length - 1", i,
+                        f"`{b}[length({b}) - {i.expr.value}]`")
 
     def unknown_name(self, tok, fix=None):
         name = tok.text
@@ -1031,16 +1218,21 @@ class Checker:
             fix = "examples run on their own, so parameters aren't in scope: write the values out"
         self.err("unknown-name", f"`{name}` isn't defined here", tok, fix)
 
-    def need(self, e, t, want, op):
+    def need(self, e, t, want, op, other=None):
         if t and t != want:
-            fix = "join strings with interpolation: `\"{a}{b}\"`" if (t, op) == ("String", "+") else None
-            self.err_at("type-mismatch", f"`{op}` needs {want}, but `{render(e)}` is {t}", e, fix)
+            fix = None
+            if (t, op) == ("String", "+"):
+                fix = "join strings with interpolation: `\"{a}{b}\"`"
+            elif is_list(t) and op == "*" and e.kind == "list" and len(e.items) == 1 and other is not None:
+                fix = f"`repeat(item: {render(e.items[0])}, times: {render(other)})`"
+            what = "an index" if op == "[...]" else f"`{op}`"
+            self.err_at("type-mismatch", f"{what} needs {want}, but `{render(e)}` is {t}", e, fix)
 
-    def expr(self, e):
-        e.ty = self._expr(e)
+    def expr(self, e, want=None):
+        e.ty = self._expr(e, want)
         return e.ty
 
-    def _expr(self, e):
+    def _expr(self, e, want=None):
         k = e.kind
         if k == "int":
             return "Int"
@@ -1066,11 +1258,49 @@ class Checker:
         if k == "not":
             self.need(e.expr, self.expr(e.expr), "Bool", "not")
             return "Bool"
+        if k == "list":
+            if not e.items:
+                if is_list(want):
+                    return want
+                self.err("empty-list-type", "an empty list needs a type", e.tok,
+                         "say which, e.g. `let xs: List[Int] = []` or `var xs: List[String] = []`", length=2)
+                return None
+            first = None
+            for i, x in enumerate(e.items):
+                t = self.expr(x, want=first or elem(want))
+                if t == "Unit":
+                    self.err_at("unit-value", f"`{render(x)}` returns nothing, so it can't be a list item", x)
+                elif first is None:
+                    first = t
+                elif t and t != first:
+                    self.err_at("type-mismatch", f"a list's items all have one type: the first is {first}, but "
+                                f"`{render(x)}` is {t}", x)
+            return f"List[{first}]" if first else None
+        if k == "index":
+            bt, it = self.expr(e.base), self.expr(e.index)
+            self.need(e.index, it, "Int", "[...]")
+            self.no_negative_index(e)
+            if bt == "String":
+                self.err_at("not-a-list", "strings can't be indexed yet", e.base)
+                return None
+            if bt and not is_list(bt):
+                self.err_at("not-a-list", f"`{render(e.base)}` is {bt}, not a list, so it can't be indexed", e.base)
+                return None
+            return elem(bt)
         if k == "bin":
-            lt, rt, op = self.expr(e.left), self.expr(e.right), e.op
+            op = e.op
+            lt = self.expr(e.left)
+            rt = self.expr(e.right, want=lt if op in ("==", "!=") else None)
+            if op == "+" and (is_list(lt) or is_list(rt)):
+                fix = None
+                if is_list(lt) and e.right.kind == "list" and len(e.right.items) == 1:
+                    fix = f"`append(list: {render(e.left)}, item: {render(e.right.items[0])})`"
+                self.err_at("type-mismatch", "there's no list `+`" + ("" if fix else "; to join two lists, "
+                            "`append` the items of one to the other in a `while` loop"), e, fix)
+                return lt if is_list(lt) else None
             if op in ARITH_OPS or op in ("<", "<=", ">", ">="):
-                self.need(e.left, lt, "Int", op)
-                self.need(e.right, rt, "Int", op)
+                self.need(e.left, lt, "Int", op, other=e.right)
+                self.need(e.right, rt, "Int", op, other=e.left)
                 return "Int" if op in ARITH_OPS else "Bool"
             if op in ("==", "!="):
                 if "Unit" in (lt, rt):
@@ -1082,46 +1312,25 @@ class Checker:
             self.need(e.right, rt, "Bool", op)
             return "Bool"
         if k == "call":
-            return self.call(e)
+            return self.call(e, want)
         return None
 
-    def call(self, e):
-        name = e.name
-        if name == "print":
-            self.effect("print", None, e)
-            if len(e.args) != 1:
-                self.err("arg-count", f"`print` takes one argument, but this call passes {len(e.args)}", e.tok)
-            for n, nt, a in e.args:
-                if n is not None:
-                    self.err("unknown-arg-name", "`print`'s argument isn't named", nt, f"`print({render(a)})`")
-                t = self.expr(a)
-                if t == "Unit":
-                    self.err_at("unit-value", f"`{render(a)}` returns nothing, so there's nothing to print", a)
-            return "Unit"
-        f = self.fns.get(name)
-        if f is None:
-            for _, _, a in e.args:
-                self.expr(a)
-            sugg = difflib.get_close_matches(name, list(self.fns) + ["print"], 1)
-            fix = CALL_HINTS.get(name) or (f"did you mean `{sugg[0]}`?" if sugg else None)
-            self.err("unknown-fn", f"there's no function `{name}`", e.tok, fix)
-            return None
-        self.effect(name, f, e)
-        params, args = f.params, e.args
-        pnames = [p[0] for p in params]
-        types = [self.expr(a) for _, _, a in args]
-        want = f"`{name}({', '.join(p + ': ...' for p in pnames)})`"
-        if len(args) != len(params):
-            self.err("arg-count", f"`{name}` takes {len(params)} argument(s), but this call passes {len(args)}",
-                     e.tok, want)
-            return f.ret
+    def match_args(self, name, pnames, e):
+        """Check argument names against the parameters (D4). Returns order, where order[i] is the index of the
+        parameter args[i] fills, or None if the count is wrong (already reported)."""
+        args = e.args
         names = [n for n, _, _ in args]
-        order = list(range(len(args)))  # order[i] = index of the param that args[i] fills
-        if len(params) == 1:
+        want = f"`{name}({', '.join(p + ': ...' for p in pnames)})`"
+        if len(args) != len(pnames):
+            self.err("arg-count", f"`{name}` takes {len(pnames)} argument(s), but this call passes {len(args)}",
+                     e.tok, want)
+            return None
+        order = list(range(len(args)))
+        if len(pnames) == 1:
             if names[0] is not None and names[0] != pnames[0]:
                 self.err("unknown-arg-name", f"`{name}`'s parameter is `{pnames[0]}`, not `{names[0]}`",
                          args[0][1], f"`{pnames[0]}: ...` or no name")
-        elif len(params) > 1:
+        elif len(pnames) > 1:
             if any(n is None for n in names):
                 fixed = f"{name}(" + ", ".join(f"{p}: {render(a)}" for p, (_, _, a) in zip(pnames, args)) + ")"
                 self.err("unnamed-arg", f"`{name}` takes more than one argument, so each one must be named",
@@ -1129,9 +1338,9 @@ class Checker:
             else:
                 bad = [(n, t) for n, t, _ in args if n not in pnames]
                 for n, t in bad:
-                    s = difflib.get_close_matches(n, pnames, 1)
+                    sg = difflib.get_close_matches(n, pnames, 1)
                     self.err("unknown-arg-name", f"`{name}` has no parameter `{n}` (it has {', '.join(pnames)})",
-                             t, f"did you mean `{s[0]}`?" if s else None)
+                             t, f"did you mean `{sg[0]}`?" if sg else None)
                 if not bad:
                     if len(set(names)) != len(names):
                         self.err("duplicate-arg", "the same argument is given twice", e.tok, want)
@@ -1142,13 +1351,89 @@ class Checker:
                             fixed = f"{name}(" + ", ".join(f"{p}: {render(by[p])}" for p in pnames) + ")"
                             self.err("arg-order", f"arguments must come in the order `fn {name}` declares them "
                                      f"({', '.join(pnames)})", e.tok, f"`{fixed}`")
+        return order
+
+    def unnamed_builtin(self, e):
+        """print(x) and length(x): one argument, never named. Returns the argument's type."""
+        name = e.name
+        if len(e.args) != 1:
+            self.err("arg-count", f"`{name}` takes one argument, but this call passes {len(e.args)}", e.tok)
+        t = None
+        for n, nt, a in e.args:
+            if n is not None:
+                self.err("unknown-arg-name", f"`{name}`'s argument isn't named", nt, f"`{name}({render(a)})`")
+            t = self.expr(a)
+            if t == "Unit":
+                self.err_at("unit-value", f"`{render(a)}` returns nothing, so there's nothing to {name}", a)
+        return t if len(e.args) == 1 else None
+
+    def call(self, e, want=None):
+        name = e.name
+        if name == "print":
+            self.effect("print", None, e)
+            self.unnamed_builtin(e)
+            return "Unit"
+        if name == "length":
+            t = self.unnamed_builtin(e)
+            if t and t != "String" and not is_list(t):
+                self.err_at("type-mismatch", f"`length` takes a list or a String, but `{render(e.args[0][2])}` is {t}",
+                            e.args[0][2])
+            return "Int"
+        if name in ("append", "repeat"):
+            return self.list_builtin(e, want)
+        f = self.fns.get(name)
+        if f is None:
+            for _, _, a in e.args:
+                self.expr(a)
+            sugg = difflib.get_close_matches(name, list(self.fns) + list(BUILTINS), 1)
+            fix = CALL_HINTS.get(name) or (f"did you mean `{sugg[0]}`?" if sugg else None)
+            self.err("unknown-fn", f"there's no function `{name}`", e.tok, fix)
+            return None
+        self.effect(name, f, e)
+        params, args = f.params, e.args
+        order = self.match_args(name, [p[0] for p in params], e)
+        if order is None:
+            for _, _, a in args:
+                self.expr(a)
+            return f.ret
         for i, (_, _, a) in enumerate(args):
             pn, pt, _ = params[order[i]]
-            if types[i] == "Unit":
+            t = self.expr(a, want=pt)
+            if t == "Unit":
                 self.err_at("unit-value", f"`{render(a)}` returns nothing, so it can't be an argument", a)
-            elif pt and types[i] and pt != types[i]:
-                self.err_at("type-mismatch", f"`{name}`'s `{pn}` is {pt}, but `{render(a)}` is {types[i]}", a)
+            elif pt and t and pt != t:
+                self.err_at("type-mismatch", f"`{name}`'s `{pn}` is {pt}, but `{render(a)}` is {t}", a)
         return f.ret
+
+    def list_builtin(self, e, want):
+        """append(list: List[T], item: T) -> List[T]; repeat(item: T, times: Int) -> List[T]."""
+        name, pnames = e.name, BUILTINS[e.name]
+        order = self.match_args(name, pnames, e)
+        if order is None:
+            for _, _, a in e.args:
+                self.expr(a)
+            return None
+        by = {pnames[order[i]]: a for i, (_, _, a) in enumerate(e.args)}
+        if name == "append":
+            lt = self.expr(by["list"], want=want if is_list(want) else None)
+            if lt and not is_list(lt):
+                self.err_at("type-mismatch", f"`append`'s `list` must be a list, but `{render(by['list'])}` is {lt}",
+                            by["list"])
+                lt = None
+            it = self.expr(by["item"], want=elem(lt))
+            if it == "Unit":
+                self.err_at("unit-value", f"`{render(by['item'])}` returns nothing, so it can't be a list item",
+                            by["item"])
+            elif lt and it and it != elem(lt):
+                self.err_at("type-mismatch", f"`{render(by['list'])}` is {lt}, so its items are {elem(lt)}, but "
+                            f"`{render(by['item'])}` is {it}", by["item"])
+            return lt
+        it = self.expr(by["item"], want=elem(want))
+        self.need(by["times"], self.expr(by["times"]), "Int", "times")
+        if it == "Unit":
+            self.err_at("unit-value", f"`{render(by['item'])}` returns nothing, so it can't be a list item", by["item"])
+            return None
+        return f"List[{it}]" if it else None
 
     def effect(self, name, f, e):
         uses = f is None or f.uses_io  # f None means the builtin `print`
@@ -1164,6 +1449,20 @@ class Checker:
 # ------------------------------------------------------------------ C emitter (D1)
 
 CTYPE = {"Int": "int64_t", "Bool": "bool", "String": "const char *", "Unit": "void"}
+SLOT = {"Int": "i", "Bool": "b", "String": "s"}
+
+
+def ctype(t):
+    return "cl_list *" if is_list(t) else CTYPE[t]
+
+
+def slot(t):
+    return "l" if is_list(t) else SLOT[t]
+
+
+def desc(t):
+    """Type descriptor the runtime uses to show, compare and copy values: I, B, S, or L + item descriptor."""
+    return "L" + desc(elem(t)) if is_list(t) else t[0]
 
 RUNTIME = r"""#include <stdarg.h>
 #include <stdbool.h>
@@ -1215,6 +1514,102 @@ static const char *cl_concat(int n, ...) {
     va_end(ap);
     *q = 0; return out;
 }
+static int64_t cl_str_len(const char *s) {  /* in Unicode code points */
+    int64_t n = 0; for (; *s; s++) n += ((unsigned char)*s & 0xC0) != 0x80; return n; }
+
+/* Lists (D19) have value semantics: assigning or passing one never creates a shared, mutable alias.
+   rc counts the variables and list slots that may refer to a list; a mutation copies the list first
+   unless rc == 1. rc may over-count (v0 never frees anything), which only costs an extra copy. */
+typedef struct cl_list cl_list;
+typedef union { int64_t i; bool b; const char *s; cl_list *l; } cl_val;
+struct cl_list { int64_t rc, len, cap; cl_val *items; };
+static cl_list *cl_list_new(int64_t cap, int line, int col) {
+    if (cap < 4) cap = 4;
+    if (cap > ((int64_t)1 << 40) / (int64_t)sizeof(cl_val)) cl_trap("list too large", line, col);
+    cl_list *l = cl_alloc(sizeof *l); l->rc = 1; l->len = 0; l->cap = cap;
+    l->items = cl_alloc(sizeof(cl_val) * (size_t)cap); return l; }
+static cl_list *cl_share(cl_list *l) { l->rc++; return l; }
+static cl_list *cl_list_of(int n, ...) {
+    cl_list *l = cl_list_new(n, 0, 0); va_list ap; va_start(ap, n);
+    for (int i = 0; i < n; i++) l->items[i] = va_arg(ap, cl_val);
+    va_end(ap); l->len = n; return l; }
+static cl_list *cl_list_copy(cl_list *src, int64_t cap, const char *d) {
+    cl_list *l = cl_list_new(cap > src->len ? cap : src->len, 0, 0);
+    memcpy(l->items, src->items, sizeof(cl_val) * (size_t)src->len); l->len = src->len;
+    if (d[0] == 'L') for (int64_t i = 0; i < l->len; i++) l->items[i].l->rc++;
+    return l; }
+static void cl_unshare(cl_list **p, int64_t cap, const char *d) {
+    if ((*p)->rc > 1) { (*p)->rc--; *p = cl_list_copy(*p, cap, d); } }
+static void cl_index_check(cl_list *l, int64_t i, int line, int col) {
+    if (i >= 0 && i < l->len) return;
+    char m[200];
+    if (i < 0) snprintf(m, sizeof m, "index %lld is out of range: indexes start at 0, and there's no negative "
+                        "indexing (the last item is at length - 1)", (long long)i);
+    else if (l->len == 0) snprintf(m, sizeof m, "index %lld is out of range: the list is empty", (long long)i);
+    else snprintf(m, sizeof m, "index %lld is out of range for a list of length %lld (the last index is %lld)",
+                  (long long)i, (long long)l->len, (long long)(l->len - 1));
+    cl_trap(m, line, col); }
+static cl_val cl_list_get(cl_list *l, int64_t i, int line, int col) {
+    cl_index_check(l, i, line, col); return l->items[i]; }
+static void cl_list_set(cl_list **p, int64_t i, cl_val v, const char *d, int line, int col) {
+    cl_index_check(*p, i, line, col); cl_unshare(p, (*p)->len, d);
+    if (d[0] == 'L') (*p)->items[i].l->rc--;
+    (*p)->items[i] = v; }
+static void cl_list_push(cl_list **p, cl_val v, const char *d) {
+    cl_unshare(p, (*p)->len * 2 + 1, d);
+    cl_list *l = *p;
+    if (l->len == l->cap) {
+        l->cap *= 2; l->items = realloc(l->items, sizeof(cl_val) * (size_t)l->cap);
+        if (!l->items) { fputs("runtime error: out of memory\n", stderr); exit(70); } }
+    l->items[l->len++] = v; }
+static cl_list *cl_list_appended(cl_list *src, cl_val v, const char *d) {
+    cl_list *l = cl_list_copy(src, src->len + 1, d); l->items[l->len++] = v; return l; }
+static cl_list *cl_list_repeat(cl_val v, int64_t n, const char *d, int line, int col) {
+    if (n < 0) cl_trap("`repeat` needs `times` to be 0 or more", line, col);
+    cl_list *l = cl_list_new(n, line, col);
+    for (int64_t i = 0; i < n; i++) l->items[i] = v;
+    l->len = n;
+    if (d[0] == 'L') v.l->rc += n - 1;
+    return l; }
+static bool cl_list_eq(cl_list *a, cl_list *b, const char *d);
+static bool cl_val_eq(cl_val a, cl_val b, const char *d) {
+    switch (d[0]) {
+    case 'I': return a.i == b.i;
+    case 'B': return a.b == b.b;
+    case 'S': return strcmp(a.s, b.s) == 0;
+    default: return cl_list_eq(a.l, b.l, d + 1); } }
+static bool cl_list_eq(cl_list *a, cl_list *b, const char *d) {
+    if (a == b) return true;
+    if (a->len != b->len) return false;
+    for (int64_t i = 0; i < a->len; i++) if (!cl_val_eq(a->items[i], b->items[i], d)) return false;
+    return true; }
+typedef struct { char *p; size_t len, cap; } cl_buf;
+static void cl_put(cl_buf *b, const char *s, size_t n) {
+    if (b->len + n + 1 > b->cap) {
+        b->cap = (b->len + n + 1) * 2; b->p = realloc(b->p, b->cap);
+        if (!b->p) { fputs("runtime error: out of memory\n", stderr); exit(70); } }
+    memcpy(b->p + b->len, s, n); b->len += n; b->p[b->len] = 0; }
+static void cl_show_into(cl_buf *b, cl_val v, const char *d) {
+    char tmp[24];
+    switch (d[0]) {
+    case 'I': snprintf(tmp, sizeof tmp, "%lld", (long long)v.i); cl_put(b, tmp, strlen(tmp)); break;
+    case 'B': cl_put(b, v.b ? "true" : "false", v.b ? 4 : 5); break;
+    case 'S':  /* quoted, with the language's own escapes, so it reads back as a literal */
+        cl_put(b, "\"", 1);
+        for (const char *s = v.s; *s; s++) {
+            const char *e = NULL;
+            switch (*s) { case '"': e = "\\\""; break; case '\\': e = "\\\\"; break; case '\n': e = "\\n"; break;
+                          case '\t': e = "\\t"; break; case '{': e = "\\{"; break; case '}': e = "\\}"; break; }
+            if (e) cl_put(b, e, 2); else cl_put(b, s, 1); }
+        cl_put(b, "\"", 1); break;
+    default:
+        cl_put(b, "[", 1);
+        for (int64_t i = 0; i < v.l->len; i++) {
+            if (i) cl_put(b, ", ", 2);
+            cl_show_into(b, v.l->items[i], d + 1); }
+        cl_put(b, "]", 1); } }
+static const char *cl_show(cl_val v, const char *d) {
+    cl_buf b = {0}; cl_put(&b, "", 0); cl_show_into(&b, v, d); return b.p; }
 static void cl_hex(const char *s) {
     if (!*s) { putchar('-'); return; }
     for (; *s; s++) printf("%02x", (unsigned char)*s);
@@ -1250,6 +1645,7 @@ class Emitter:
         for f in self.fns:
             out.append(self.proto(f) + ";")
         for f in self.fns:
+            self.params = {n for n, _, _ in f.params}
             out.append("")
             out.append(self.proto(f) + " {")
             self.block(f.body, 1, out)
@@ -1263,7 +1659,13 @@ class Emitter:
         for i, s in enumerate(self.examples):
             out.append(f'    printf("EXRUN {i}\\n"); fflush(stdout);')
             e = s.expr
-            if e.kind == "bin" and e.op == "==" and not e.paren and e.left.ty == "String":
+            if e.kind == "bin" and e.op == "==" and not e.paren and is_list(e.left.ty):
+                d = c_string(desc(e.left.ty))
+                out.append(f"    {{ cl_list *l = {self.expr(e.left)}; cl_list *r = {self.expr(e.right)};")
+                out.append(f'      if (!cl_list_eq(l, r, {c_string(desc(elem(e.left.ty)))})) {{ printf("EXFAILV {i} "); '
+                           f"cl_hex(cl_show((cl_val){{.l = l}}, {d})); putchar(' '); "
+                           f"cl_hex(cl_show((cl_val){{.l = r}}, {d})); putchar('\\n'); failed++; }} }}")
+            elif e.kind == "bin" and e.op == "==" and not e.paren and e.left.ty == "String":
                 out.append(f"    {{ const char *l = {self.expr(e.left)}; const char *r = {self.expr(e.right)};")
                 out.append(f'      if (strcmp(l, r) != 0) {{ printf("EXFAILS {i} "); cl_hex(l); putchar(\' \'); '
                            'cl_hex(r); putchar(\'\\n\'); failed++; } }')
@@ -1280,8 +1682,8 @@ class Emitter:
         return "\n".join(out)
 
     def proto(self, f):
-        ps = ", ".join(f"{CTYPE[t]} v_{n}" for n, t, _ in f.params) or "void"
-        return f"static {CTYPE[f.ret]} f_{f.name}({ps})"
+        ps = ", ".join(f"{ctype(t)} v_{n}" for n, t, _ in f.params) or "void"
+        return f"static {ctype(f.ret)} f_{f.name}({ps})"
 
     def block(self, stmts, depth, out):
         ind = "    " * depth
@@ -1293,11 +1695,27 @@ class Emitter:
                 if s.name == "_":
                     out.append(f"{ind}(void)({self.expr(s.expr)});")
                 else:
-                    out.append(f"{ind}{CTYPE[s.var_ty]} v_{s.name} = {self.expr(s.expr)};")
+                    out.append(f"{ind}{ctype(s.var_ty)} v_{s.name} = {self.own(s.expr)};")
             elif k == "assign":
-                out.append(f"{ind}v_{s.name} = {self.expr(s.expr)};")
+                e = s.expr
+                if (e.kind == "call" and e.name == "append" and len(e.args) == 2 and e.args[0][2].kind == "name"
+                        and e.args[0][2].name == s.name):
+                    # xs = append(list: xs, item: x): grow xs in place when nothing else refers to it
+                    out.append(f"{ind}cl_list_push(&v_{s.name}, {self.val(e.args[1][2], own=True)}, "
+                               f"{c_string(desc(elem(e.ty)))});")
+                else:
+                    out.append(f"{ind}v_{s.name} = {self.own(e)};")
+            elif k == "setindex":
+                t = s.target
+                out.append(f"{ind}cl_list_set(&v_{t.base.name}, {self.expr(t.index)}, {self.val(s.expr, own=True)}, "
+                           f"{c_string(desc(elem(t.base.ty)))}, {t.tok.line}, {t.tok.col});")
             elif k == "return":
-                out.append(f"{ind}return;" if s.expr is None else f"{ind}return {self.expr(s.expr)};")
+                if s.expr is None:
+                    out.append(f"{ind}return;")
+                elif s.expr.kind == "name" and s.expr.name not in self.params:
+                    out.append(f"{ind}return {self.expr(s.expr)};")  # a local's last use: move it out
+                else:
+                    out.append(f"{ind}return {self.own(s.expr)};")
             elif k == "if":
                 for j, (c, body) in enumerate(s.branches):
                     out.append(f"{ind}{'if' if j == 0 else '} else if'} ({self.expr(c)}) {{")
@@ -1313,23 +1731,43 @@ class Emitter:
             elif k == "exprstmt":
                 out.append(f"{ind}{self.expr(s.expr)};")
 
+    def own(self, e):
+        """C for e when the result is stored (a variable, list slot or return value): a list read from a
+        variable or another list is shared, so a later mutation of either copies first (D19)."""
+        c = self.expr(e)
+        if is_list(e.ty) and e.kind in ("name", "index"):
+            return f"cl_share({c})"
+        return c
+
+    def val(self, e, own=False):
+        """e wrapped as a cl_val (a list slot)."""
+        return f"(cl_val){{.{slot(e.ty)} = {self.own(e) if own else self.expr(e)}}}"
+
+    def show(self, e):
+        """C for e as a const char * (print and interpolation)."""
+        if e.ty == "String":
+            return self.expr(e)
+        if e.ty == "Bool":
+            return f'({self.expr(e)} ? "true" : "false")'
+        if e.ty == "Int":
+            return f"cl_int_str({self.expr(e)})"
+        return f"cl_show({self.val(e)}, {c_string(desc(e.ty))})"
+
     def expr(self, e):
         k = e.kind
+        if k == "list":
+            if not e.items:
+                return "cl_list_of(0)"
+            return f"cl_list_of({len(e.items)}, " + ", ".join(self.val(x, own=True) for x in e.items) + ")"
+        if k == "index":
+            return (f"cl_list_get({self.expr(e.base)}, {self.expr(e.index)}, {e.tok.line}, {e.tok.col})"
+                    f".{slot(e.ty)}")
         if k == "int":
             return f"INT64_C({e.value})"
         if k == "bool":
             return "true" if e.value else "false"
         if k == "str":
-            pieces = []
-            for kind, p in e.parts:
-                if kind == "text":
-                    pieces.append(c_string(p))
-                elif p.ty == "String":
-                    pieces.append(self.expr(p))
-                elif p.ty == "Bool":
-                    pieces.append(f'({self.expr(p)} ? "true" : "false")')
-                else:
-                    pieces.append(f"cl_int_str({self.expr(p)})")
+            pieces = [c_string(p) if kind == "text" else self.show(p) for kind, p in e.parts]
             if len(pieces) == 1 and e.parts[0][0] == "text":
                 return pieces[0]
             return f"cl_concat({len(pieces)}, " + ", ".join(pieces) + ")"
@@ -1345,13 +1783,28 @@ class Emitter:
                 return f"{ARITH_FN[e.op]}({l}, {r}, {e.tok.line}, {e.tok.col})"
             if e.op in ("==", "!=") and e.left.ty == "String":
                 return f"(strcmp({l}, {r}) {e.op} 0)"
+            if e.op in ("==", "!=") and is_list(e.left.ty):
+                return f"({'' if e.op == '==' else '!'}cl_list_eq({l}, {r}, {c_string(desc(elem(e.left.ty)))}))"
             op = {"and": "&&", "or": "||"}.get(e.op, e.op)
             return f"({l} {op} {r})"
         if k == "call":
             if e.name == "print":
                 a = e.args[0][2]
+                if is_list(a.ty):
+                    return f"cl_print_str({self.show(a)})"
                 kind = {"Bool": "bool", "String": "str"}.get(a.ty, "int")
                 return f"cl_print_{kind}({self.expr(a)})"
+            if e.name == "length":
+                a = e.args[0][2]
+                return f"cl_str_len({self.expr(a)})" if a.ty == "String" else f"({self.expr(a)})->len"
+            if e.name in ("append", "repeat"):
+                by = {n: a for n, _, a in e.args}
+                d = c_string(desc(elem(e.ty)))
+                if e.name == "append":
+                    return f"cl_list_appended({self.expr(by['list'])}, {self.val(by['item'], own=True)}, {d})"
+                return (f"cl_list_repeat({self.val(by['item'], own=True)}, {self.expr(by['times'])}, {d}, "
+                        f"{e.tok.line}, {e.tok.col})")
+            # Arguments are borrowed: parameters can't change, and storing one anywhere shares it.
             return f"f_{e.name}(" + ", ".join(self.expr(a) for _, _, a in e.args) + ")"
         raise AssertionError(f"can't emit {k}")
 
@@ -1395,6 +1848,11 @@ def run_examples(exe, em, d):
             last = int(parts[1])
         elif parts[0] == "EXDONE":
             done = True
+        elif parts[0] == "EXFAILV":
+            s = em.examples[int(parts[1])]
+            l, r = (bytes.fromhex(x).decode("utf-8", "replace") for x in parts[2:4])
+            d.error("example-failed", f"example is false: `{render(s.expr.left)}` is {l}, expected {r}",
+                    s.tok.line, s.tok.col, len("example"))
         elif parts[0] == "EXFAILS":
             s = em.examples[int(parts[1])]
             l, r = (render_string(bytes.fromhex(x).decode("utf-8", "replace") if x != "-" else "")
