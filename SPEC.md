@@ -28,7 +28,8 @@ end fn main
 - **One statement per line.** No `;`, no line continuation. Indentation is not significant
   (use two spaces per level by convention).
 - **Blocks have no braces and no `:`.** A block starts with its keyword line and ends with a
-  closer that names it: `end if`, `end while`, `end fn <name>` (repeating the function's name).
+  closer that names it: `end if`, `end while`, `end for`, `end fn <name>` (repeating the
+  function's name).
 
 ## Types
 
@@ -69,18 +70,16 @@ There are no other types yet: no floats, records, maps, null. Nothing converts i
 - **Lists are values, like `Int`s:** `var ys = xs` copies, so changing `ys` never changes
   `xs`, and a function can't change a list it's given. (Copies are made only when needed.)
 - `==` compares items; `print` and `{xs}` show `[1, 2, 3]` (strings inside are quoted).
-- There are no methods (`xs.append`), no `+` on lists and no `for` loop yet: loop with `while`.
+- There are no methods (`xs.append`) and no `+` on lists.
 
 ```
 fn total(xs: List[Int]) -> Int
   example total([1, 2, 3]) == 6
   example total([]) == 0
   var sum = 0
-  var i = 0
-  while i < length(xs)
-    sum = sum + xs[i]
-    i = i + 1
-  end while
+  for x in xs
+    sum = sum + x
+  end for
   return sum
 end fn total
 
@@ -128,7 +127,11 @@ end fn name
 | `x = expr` | assignment, only to a `var` |
 | `return expr` / `return` | leave the function (with a value if it has a return type) |
 | `if` / `else if` / `else` / `end if` | conditions must be `Bool` |
-| `while cond` ... `end while` | loop. There is no `for`, `break` or `continue` yet |
+| `while cond` ... `end while` | loop while `cond` is true |
+| `for x in xs` ... `end for` | once per item of the list `xs`, in order |
+| `for i in 0 until n` ... `end for` | `i` = 0, 1, ..., n - 1 (`until` stops before the end) |
+| `for i in 1 through n` ... `end for` | `i` = 1, 2, ..., n (`through` includes the end) |
+| `break` / `continue` | leave the innermost loop / skip to its next round |
 | `f(args)` | call a function for its effect |
 | `xs[i] = expr` | change one item of a `var` list |
 | `print(x)` | built in: prints any value and a newline; needs `uses io` |
@@ -144,6 +147,11 @@ fn sign(x: Int) -> Int
   end if
 end fn sign
 ```
+
+`for` loops count up by 1. Add `reversed` at the end of the line to go the other way:
+`for i in 0 until n reversed` is n - 1 down to 0; `for x in xs reversed` is last to first.
+The bounds and the list are evaluated once, before the loop starts. The loop variable can't be
+assigned (use `while` for other steps), and a range whose start is past its end runs 0 times.
 
 A name can't be reused inside a function: no shadowing, and no redeclaring in an inner block.
 A variable declared inside a block is visible only in that block.

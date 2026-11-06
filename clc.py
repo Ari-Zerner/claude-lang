@@ -95,9 +95,10 @@ class Diags:
 
 # ------------------------------------------------------------------ lexer
 
-KEYWORDS = {"fn", "end", "if", "else", "while", "return", "let", "var", "example",
+KEYWORDS = {"fn", "end", "if", "else", "while", "for", "break", "continue", "return", "let", "var", "example",
             "uses", "true", "false", "and", "or", "not"}
-BLOCK_KINDS = ("fn", "if", "while")
+BLOCK_KINDS = ("fn", "if", "while", "for")
+RANGE_FIX = "`a until b` stops before b, `a through b` includes it: `for i in 0 until n`"
 TWO_CHAR_OPS = ("->", "==", "!=", "<=", ">=")
 ONE_CHAR_OPS = "+-*/%<>=(),:[]"
 CMP_OPS = ("==", "!=", "<", "<=", ">", ">=")
@@ -132,6 +133,14 @@ def lex(src, d):
     d.lexing = True
     for lineno, line in enumerate(lines, 1):
         before = len(toks)
+        stripped = line.lstrip()
+        if stripped.startswith("for") and stripped[3:].lstrip().startswith("(") and ";" in stripped:
+            col = len(line) - len(stripped) + 1
+            d.error("syntax", "there's no C-style `for`", lineno, col, len(stripped),
+                    "count with `for i in 0 until n` (or `while` for other steps)")
+            toks.append(Tok("kw", "for", lineno, col))  # keep the block open so `end for` matches
+            toks.append(Tok("nl", "", lineno, len(line) + 1))
+            continue
         lex_span(line, 0, len(line), lineno, d, toks)
         if len(toks) > before:
             toks.append(Tok("nl", "", lineno, len(line) + 1))
@@ -147,6 +156,13 @@ def lex_dot(line, i, n, lineno, d, toks):
     while j < n and (line[j].isalnum() or line[j] == "_"):
         j += 1
     m, prev = line[i + 1:j], (toks[-1] if toks else None)
+    if line[i + 1:i + 2] == ".":
+        k = i
+        while k < n and line[k] in ".=<":
+            k += 1
+        d.error("bad-char", f"`{line[i:k]}` isn't a range; ranges are written with words", lineno, i + 1, k - i,
+                RANGE_FIX)
+        return k
     if prev is not None and prev.kind == "int" and m.isdigit():
         d.error("bad-char", "there are no floats yet; Int is the only number type", lineno, prev.col,
                 j - prev.col + 1)
@@ -370,9 +386,8 @@ TYPE_HINTS = {"int": "Int", "i64": "Int", "i32": "Int", "Integer": "Int", "integ
               "str": "String", "Str": "String", "string": "String", "text": "String", "Text": "String"}
 NO_RETURN_TYPES = ("Unit", "Void", "void", "None", "Nothing")
 FN_WORDS = ("def", "func", "function", "fun", "proc")
-CLOSER_WORDS = {"endif": "if", "fi": "if", "endwhile": "while", "done": "while", "endfn": "fn"}
+CLOSER_WORDS = {"endif": "if", "fi": "if", "endwhile": "while", "done": "while", "endfn": "fn", "endfor": "for"}
 STMT_HINTS = {"elif": "write `else if`", "elsif": "write `else if`", "elseif": "write `else if`",
-              "for": "there's no `for` loop yet; use `while`",
               "const": "write `let` (or `var` for a variable that changes)",
               "loop": "write `while true`"}
 LINE_END_HINTS = {"then": "no `then`: the block starts on the next line",
@@ -682,6 +697,12 @@ class Parser:
                 return self.if_stmt()
             if w == "while":
                 return self.while_stmt()
+            if w == "for":
+                return self.for_stmt()
+            if w in ("break", "continue"):
+                self.next()
+                self.end_line()
+                return Node(w, t)
             if w == "example":
                 self.next()
                 e = self.expr()
@@ -772,6 +793,46 @@ class Parser:
         body, _, _ = self.block_body()
         self.stack.pop()
         return Node("while", kw, cond=cond, body=body)
+
+    def for_stmt(self):
+        """for x in xs / for i in a until b / for i in a through b, each optionally ending in `reversed` (D21)."""
+        kw = self.next()
+        n = Node("for", kw, var=None, var_tok=None, src=None, lo=None, hi=None, incl=False, rev=False)
+        try:
+            if self.at_op("("):
+                self.fail("syntax", "there's no C-style `for`", self.peek(), "count with `for i in 0 until n`")
+            n.var_tok = self.expect_name("for the loop variable, e.g. `for x in xs`")
+            n.var = n.var_tok.text
+            if self.at_op(","):
+                self.fail("syntax", "a `for` loop has one variable", self.peek(),
+                          "loop over the indexes with `for i in 0 until length(xs)` and read `xs[i]`")
+            if not self.at("name", "in"):
+                t = self.peek()
+                self.fail("syntax", f"expected `in` after `for {n.var}`, found {describe(t)}", t,
+                          f"`for {n.var} in ...`")
+            self.next()
+            first = self.expr()
+            if self.at("name") and self.peek().text in ("until", "through", "to"):
+                w = self.next()
+                n.lo, n.hi, n.incl = first, self.expr(), w.text != "until"
+                if w.text == "to":
+                    a, b = render(n.lo), render(n.hi)
+                    self.d.error("range-to", "`to` includes the end in some languages and not in others, so it "
+                                 "isn't used", w.line, w.col, 2,
+                                 f"`for {n.var} in {a} through {b}` (includes {b}) or `for {n.var} in {a} until {b}` "
+                                 f"(stops before {b})")
+            else:
+                n.src = first
+            if self.at("name", "reversed"):
+                self.next()
+                n.rev = True
+            self.end_line()
+        except ParseError:
+            self.skip_line()
+        self.stack.append(["for", kw.line, None])
+        n.body, _, _ = self.block_body()
+        self.stack.pop()
+        return n
 
     # -- expressions (D6: conventional precedence, with the easy-to-misread cases made errors)
     def expr(self):
@@ -968,8 +1029,8 @@ NAME_HINTS = {"True": "write `true`", "False": "write `false`", "TRUE": "write `
 
 
 class Var:
-    def __init__(self, ty, mutable, line, param=False):
-        self.ty, self.mutable, self.line, self.param = ty, mutable, line, param
+    def __init__(self, ty, mutable, line, param=False, loop=False):
+        self.ty, self.mutable, self.line, self.param, self.loop = ty, mutable, line, param, loop
 
 
 def returns(stmts):
@@ -980,8 +1041,19 @@ def returns(stmts):
         if (s.kind == "if" and s.else_body is not None and returns(s.else_body)
                 and all(returns(b) for _, b in s.branches)):
             return True
-        if s.kind == "while" and s.cond is not None and s.cond.kind == "bool" and s.cond.value:
-            return True  # `while true` never falls through (there's no `break` yet)
+        if (s.kind == "while" and s.cond is not None and s.cond.kind == "bool" and s.cond.value
+                and not breaks(s.body)):
+            return True  # `while true` with no `break` never falls through
+    return False
+
+
+def breaks(stmts):
+    """Is there a `break` for the enclosing loop in these statements (not counting inner loops)?"""
+    for s in stmts:
+        if s.kind == "break":
+            return True
+        if s.kind == "if" and (any(breaks(b) for _, b in s.branches) or breaks(s.else_body or [])):
+            return True
     return False
 
 
@@ -1026,6 +1098,7 @@ class Checker:
     def check_fn(self, f):
         self.cur = f
         self.scopes = [{}]
+        self.loops = 0
         for pn, pt, ptok in f.params:
             if pn in self.scopes[0]:
                 self.err("duplicate-name", f"parameter `{pn}` appears twice", ptok)
@@ -1057,11 +1130,12 @@ class Checker:
         dead = warned = False
         for s in stmts:
             if dead and not warned:
-                self.d.warning("unreachable", "this line can never run: it comes after a `return`",
+                self.d.warning("unreachable", "this line can never run: it comes after a `return`, `break` or "
+                               "`continue`",
                                s.tok.line, s.tok.col, len(s.tok.text))
                 warned = True
             self.stmt(s)
-            dead = dead or s.kind == "return"
+            dead = dead or s.kind in ("return", "break", "continue")
         if new_scope:
             self.scopes.pop()
 
@@ -1134,7 +1208,14 @@ class Checker:
                 self.block(s.else_body)
         elif k == "while":
             self.cond(s.cond)
+            self.loops += 1
             self.block(s.body)
+            self.loops -= 1
+        elif k == "for":
+            self.for_stmt(s)
+        elif k in ("break", "continue"):
+            if not self.loops:
+                self.err("outside-loop", f"`{k}` only works inside a `while` or `for` loop", s.tok)
         elif k == "exprstmt":
             e = s.expr
             t = self.expr(e)
@@ -1153,6 +1234,10 @@ class Checker:
                             f"`let _ = {render(e)}` if you mean to discard it")
 
     def check_mutable(self, name, v, tok):
+        if v.loop:
+            self.err("assign-to-loop-var", f"`{name}` is the loop variable; it takes each value in turn and can't "
+                     "be assigned", tok, "to step by something other than 1, count with `while`")
+            return False
         if v.param:
             self.err("assign-to-param", f"`{name}` is a parameter, and parameters can't change", tok,
                      f"copy it into a variable first: `var my_{name} = {name}`")
@@ -1162,6 +1247,51 @@ class Checker:
                      tok, f"declare it with `var {name} = ...` on line {v.line}")
             return False
         return True
+
+    def for_stmt(self, s):
+        vt = None
+        if s.src is not None:
+            src = s.src
+            if src.kind == "call" and src.name == "range" and "range" not in self.fns:
+                a = [render(x) for _, _, x in src.args]
+                v = s.var or "i"
+                fix = {1: f"`for {v} in 0 until {a[0]}`", 2: f"`for {v} in {a[0] if a else ''} until "
+                       f"{a[1] if len(a) > 1 else ''}`"}.get(len(a), "count with `while` for steps other than 1")
+                if len(a) == 3 and a[2] == "-1":
+                    stop = src.args[1][2]
+                    lit = (stop.value if stop.kind == "int" else -stop.expr.value
+                           if stop.kind == "neg" and stop.expr.kind == "int" else None)
+                    low = str(lit + 1) if lit is not None else f"{a[1]} + 1"
+                    fix = f"`for {v} in {low} through {a[0]} reversed`"
+                self.err("unknown-fn", "there's no `range`; a `for` loop counts with words", src.tok, fix)
+                for _, _, x in src.args:
+                    self.expr(x)
+            else:
+                t = self.expr(src)
+                if is_list(t):
+                    vt = elem(t)
+                elif t == "Int":
+                    self.err_at("not-a-list", f"`for` needs a list or a range, but `{render(src)}` is Int", src,
+                                f"`for {s.var} in 0 until {render(src)}`")
+                elif t:
+                    self.err_at("not-a-list", f"`for` needs a list or a range, but `{render(src)}` is {t}", src)
+        elif s.lo is not None:
+            self.need(s.lo, self.expr(s.lo), "Int", "a range")
+            self.need(s.hi, self.expr(s.hi), "Int", "a range")
+            vt = "Int"
+        s.var_ty = vt
+        self.scopes.append({})
+        if s.var:
+            prev = self.lookup(s.var)
+            if prev:
+                self.err("duplicate-name", f"`{s.var}` is already defined on line {prev.line}; a name means one "
+                         "thing within a function", s.var_tok, "pick another name for the loop variable")
+            else:
+                self.scopes[-1][s.var] = Var(vt, False, s.tok.line, loop=True)
+        self.loops += 1
+        self.block(s.body)
+        self.loops -= 1
+        self.scopes.pop()
 
     def setindex(self, s):
         tgt = s.target
@@ -1644,6 +1774,7 @@ class Emitter:
         out = [RUNTIME.replace("@FILE@", json.dumps(self.path))]
         for f in self.fns:
             out.append(self.proto(f) + ";")
+        self.tmp = 0
         for f in self.fns:
             self.params = {n for n, _, _ in f.params}
             out.append("")
@@ -1728,8 +1859,45 @@ class Emitter:
                 out.append(f"{ind}while ({self.expr(s.cond)}) {{")
                 self.block(s.body, depth + 1, out)
                 out.append(f"{ind}}}")
+            elif k == "for":
+                self.for_stmt(s, depth, out)
+            elif k in ("break", "continue"):
+                out.append(f"{ind}{k};")
             elif k == "exprstmt":
                 out.append(f"{ind}{self.expr(s.expr)};")
+
+    def for_stmt(self, s, depth, out):
+        """Bounds and the list are evaluated once. Counting never steps past a bound, so it can't overflow;
+        `continue` goes to the C `for`'s step as it should."""
+        ind, n = "    " * depth, self.tmp
+        self.tmp += 1
+        v = f"v_{s.var}"
+        if s.src is not None:
+            L, K = f"cl_l{n}", f"cl_k{n}"
+            shared = s.src.kind in ("name", "index")
+            # A snapshot: changing the list inside the loop copies it, so the loop sees the original (D19).
+            out.append(f"{ind}{{ cl_list *{L} = {self.own(s.src)};")
+            if s.rev:
+                out.append(f"{ind}for (int64_t {K} = {L}->len - 1; {K} >= 0; {K}--) {{")
+            else:
+                out.append(f"{ind}for (int64_t {K} = 0; {K} < {L}->len; {K}++) {{")
+            out.append(f"{ind}    {ctype(s.var_ty)} {v} = {L}->items[{K}].{slot(s.var_ty)};")
+            self.block(s.body, depth + 1, out)
+            out.append(f"{ind}}}" + (f" {L}->rc--;" if shared else "") + " }")
+            return
+        lo, hi, more = f"cl_lo{n}", f"cl_hi{n}", f"cl_more{n}"
+        out.append(f"{ind}{{ int64_t {lo} = {self.expr(s.lo)}, {hi} = {self.expr(s.hi)};")
+        if not s.rev and not s.incl:
+            out.append(f"{ind}for (int64_t {v} = {lo}; {v} < {hi}; {v}++) {{")
+        elif not s.rev:
+            out.append(f"{ind}for (int64_t {v} = {lo}, {more} = {lo} <= {hi}; {more}; {more} = {v} < {hi}, "
+                       f"{v} += {more}) {{")
+        else:
+            first, cond = (hi, f"{lo} <= {hi}") if s.incl else (f"{hi} - ({lo} < {hi})", f"{lo} < {hi}")
+            out.append(f"{ind}for (int64_t {v} = {first}, {more} = {cond}; {more}; {more} = {v} > {lo}, "
+                       f"{v} -= {more}) {{")
+        self.block(s.body, depth + 1, out)
+        out.append(f"{ind}}} }}")
 
     def own(self, e):
         """C for e when the result is stored (a variable, list slot or return value): a list read from a

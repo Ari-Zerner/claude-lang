@@ -79,11 +79,16 @@ design and its decisions (D1...).
     `i = i + 1`, and "is x in the list" uses a `seen` flag or an early `return` from a helper,
     since there's no `break`. Nobody forgot the increment, but it's the most repeated pattern by far.
 
+- 2026-11-06 (night 2, step 3): **`for`, `break`, `continue` (D21).** `for x in xs`, `for i in a until b`,
+  `for i in a through b`, each optionally `reversed`; bounds and list evaluated once, the list walked
+  as a snapshot, the loop variable read-only, no overflow at the Int limits. `returns()` now knows a
+  `while true` with a `break` can fall through. Targeted fixes for `range(n)`, `range(n - 1, -1, -1)`,
+  `1 to n` (offers both readings), `0..n`, C-style headers, `for i, x in`, `for x in n`. 19 tests;
+  SPEC ~1.8k tokens.
+
 ## Next step
-1. **`for` and `break`.** Proposal to settle in DESIGN first: `for x in xs ... end for` over items;
-   `for i in 0 until n` (exclusive) and `for i in 1 through n` (inclusive), never a bare `to`, whose
-   inclusiveness differs between languages; `break` and maybe `continue`. Then rerun the list trial
-   and compare line counts.
+1. Rerun the list trial with `for` in the spec and compare program length against the
+   2026-11-06-1100/1102 runs (and whether anyone reaches for `to`, `range` or `..`).
 3. Records (structs), then bigger-program trials, a wrong-but-compiles trial, holes (D9), the
    formatter (D12). Parsing (`parse_int(s) -> Result`) needs D7's Result.
 

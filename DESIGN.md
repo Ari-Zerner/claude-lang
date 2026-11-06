@@ -117,6 +117,22 @@ Claude differs from a human programmer in ways that matter for language design:
   errors on the same line are almost always fallout from the bad character (`xs.append(4)` was
   three errors, now one), and the fix-loop trial showed the first message is what gets used.
 
+- **D21. `for` loops count with words: `until` and `through`, never `to` or `..`.** (2026-11-06)
+  The list trial's most repeated pattern was the three-line `var i = 0` / `while i < length(xs)` /
+  `i = i + 1`. `for x in xs`, `for i in 0 until n` (stops before `n`) and `for i in 1 through n`
+  (includes `n`) replace it. Every other range syntax is ambiguous across the languages Claude
+  knows: `to` is inclusive in Pascal, Lua and BASIC, `..` is exclusive in Rust and inclusive in
+  Kotlin and Ruby, and `range(a, b)` hides its exclusiveness in convention. A word that says
+  which is the whole point. `reversed` at the end of the line walks the same numbers or items
+  backwards, so a countdown never needs its bounds rewritten (`range(n - 1, -1, -1)`, a classic
+  off-by-one, gets the fix `for i in 0 through n - 1 reversed`). Only steps of 1: other steps
+  are rare and `while` covers them. Bounds and the list are evaluated once, and the loop walks a
+  snapshot of the list (D19), so changing the list inside its own loop is well defined. The loop
+  variable can't be assigned (`i = i + 1` in a C-style body is an error, not a silent skip).
+  The generated C never steps past a bound, so `through` up to the largest Int can't overflow.
+  `break` and `continue` apply to the innermost loop; no labels. `range(...)`, `1 to n`,
+  `0..n`, C-style headers and `for i, x in ...` each get a targeted fix.
+
 ## Open questions
 
 - Memory management: value semantics with copy-on-write (D19); nothing is freed yet.
