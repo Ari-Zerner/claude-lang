@@ -96,8 +96,8 @@ class Diags:
 # ------------------------------------------------------------------ lexer
 
 KEYWORDS = {"fn", "end", "if", "else", "while", "for", "break", "continue", "return", "let", "var", "example",
-            "uses", "true", "false", "and", "or", "not"}
-BLOCK_KINDS = ("fn", "if", "while", "for")
+            "uses", "true", "false", "and", "or", "not", "struct"}
+BLOCK_KINDS = ("fn", "if", "while", "for", "struct")
 RANGE_FIX = "`a until b` stops before b, `a through b` includes it: `for i in 0 until n`"
 TWO_CHAR_OPS = ("->", "==", "!=", "<=", ">=")
 ONE_CHAR_OPS = "+-*/%<>=(),:[]"
@@ -109,9 +109,10 @@ CHAR_HINTS = {
     "{": _BRACES, "}": _BRACES,
     ";": "a statement ends at the end of its line; drop the `;`",
     "&&": "write `and`", "||": "write `or`", "!": "write `not`",
-    ".": "there are no methods or fields: call a function instead, e.g. `length(xs)` or "
-         "`xs = append(list: xs, item: x)` (and there are no floats)",
+    ".": "`.` reads a struct's field (`p.x`); there are no methods: call a function instead, e.g. "
+         "`length(xs)` or `xs = append(list: xs, item: x)` (and there are no floats)",
     "'": "strings use double quotes: `\"...\"`",
+    "@": "there are no decorators or annotations",
 }
 STRING_ESCAPES = {"n": "\n", "t": "\t", "\\": "\\", '"': '"', "{": "{", "}": "}"}
 
@@ -141,6 +142,10 @@ def lex(src, d):
             toks.append(Tok("kw", "for", lineno, col))  # keep the block open so `end for` matches
             toks.append(Tok("nl", "", lineno, len(line) + 1))
             continue
+        if stripped.rstrip() == "}":
+            toks.append(Tok("rbrace", "}", lineno, len(line) - len(stripped) + 1))
+            toks.append(Tok("nl", "", lineno, len(line) + 1))
+            continue
         lex_span(line, 0, len(line), lineno, d, toks)
         if len(toks) > before:
             toks.append(Tok("nl", "", lineno, len(line) + 1))
@@ -150,8 +155,8 @@ def lex(src, d):
 
 
 def lex_dot(line, i, n, lineno, d, toks):
-    """`.` is never valid. Catch the two usual reasons: a method call (`xs.append(4)`, `s.len()`) and a
-    float (`1.5`). Returns where to resume."""
+    """`.` reads a field (`p.x`). Otherwise catch the usual mistakes: a method call (`xs.append(4)`,
+    `s.len()`), a float (`1.5`) and a range (`0..n`). Returns where to resume."""
     j = i + 1
     while j < n and (line[j].isalnum() or line[j] == "_"):
         j += 1
@@ -168,7 +173,10 @@ def lex_dot(line, i, n, lineno, d, toks):
                 j - prev.col + 1)
         return j
     if not m or not (m[0].isalpha() or m[0] == "_") or prev is None:
-        d.error("bad-char", f"`.` isn't part of the language; {CHAR_HINTS['.']}", lineno, i + 1)
+        d.error("bad-char", f"`.` isn't part of the language here; {CHAR_HINTS['.']}", lineno, i + 1)
+        return i + 1
+    if line[j:j + 1] != "(" and (prev.kind == "name" or prev.text in (")", "]")):
+        toks.append(Tok("op", ".", lineno, i + 1))
         return i + 1
     end, args = j, None
     if line[j:j + 1] == "(":
@@ -188,7 +196,7 @@ def lex_dot(line, i, n, lineno, d, toks):
         fix = f"`length({obj})`"
     elif obj:
         fix = f"call a function with `{obj}` as an argument instead"
-    d.error("method-call", f"`.{m}` doesn't exist: there are no methods or fields", lineno, i + 1, end - i, fix)
+    d.error("method-call", f"`.{m}(...)` doesn't exist: there are no methods", lineno, i + 1, end - i, fix)
     return end
 
 
@@ -250,6 +258,16 @@ def lex_span(line, i, n, lineno, d, toks, in_interp=False):
         elif c in ONE_CHAR_OPS:
             toks.append(Tok("op", c, lineno, col))
             i += 1
+        elif (c == "{" and toks and toks[-1].kind == "name" and toks[-1].text[:1].isupper()
+              and "}" in line[i:n] and not in_interp):
+            # Point { x: 1, y: 2 } (Rust, Go): recover as the call it should be
+            close, nt = line.index("}", i), toks[-1]
+            d.error("bad-char", "a struct is made by calling its name, with named fields", lineno, nt.col,
+                    close - nt.col + 2, f"`{nt.text}({line[i + 1:close].strip()})`")
+            toks.append(Tok("op", "(", lineno, col))
+            lex_span(line, i + 1, close, lineno, d, toks)
+            toks.append(Tok("op", ")", lineno, close + 1))
+            i = close + 1
         else:
             hint = CHAR_HINTS.get(c)
             d.error("bad-char", f"`{c}` isn't part of the language" + (f"; {hint}" if hint else ""), lineno, col)
@@ -346,6 +364,8 @@ def render(e):
         s = "[" + ", ".join(render(x) for x in e.items) + "]"
     elif k == "index":
         s = f"{render(e.base)}[{render(e.index)}]"
+    elif k == "field":
+        s = f"{render(e.base)}.{e.name}"
     else:
         s = "?"
     return f"({s})" if e.paren else s
@@ -357,11 +377,11 @@ def escape_text(t):
 
 
 def opener(kind, name):
-    return f"fn {name}" if kind == "fn" else kind
+    return f"{kind} {name}" if kind in ("fn", "struct") else kind
 
 
 def closer(kind, name):
-    return f"end fn {name}" if kind == "fn" else f"end {kind}"
+    return f"end {kind} {name}" if kind in ("fn", "struct") else f"end {kind}"
 
 
 def bin_node(op_tok, left, right):
@@ -386,7 +406,9 @@ TYPE_HINTS = {"int": "Int", "i64": "Int", "i32": "Int", "Integer": "Int", "integ
               "str": "String", "Str": "String", "string": "String", "text": "String", "Text": "String"}
 NO_RETURN_TYPES = ("Unit", "Void", "void", "None", "Nothing")
 FN_WORDS = ("def", "func", "function", "fun", "proc")
-CLOSER_WORDS = {"endif": "if", "fi": "if", "endwhile": "while", "done": "while", "endfn": "fn", "endfor": "for"}
+STRUCT_WORDS = ("class", "record", "data", "type", "typedef", "dataclass", "object")
+CLOSER_WORDS = {"endif": "if", "fi": "if", "endwhile": "while", "done": "while", "endfn": "fn", "endfor": "for",
+                "endstruct": "struct"}
 STMT_HINTS = {"elif": "write `else if`", "elsif": "write `else if`", "elseif": "write `else if`",
               "const": "write `let` (or `var` for a variable that changes)",
               "loop": "write `while true`"}
@@ -407,6 +429,9 @@ class Parser:
     def __init__(self, toks, d):
         self.toks, self.d, self.i = toks, d, 0
         self.stack = []  # open blocks: [kind, line, name]
+        # Struct names, so a type can name a struct declared further down.
+        self.struct_names = {toks[j + 1].text for j in range(len(toks) - 1)
+                             if toks[j].kind == "kw" and toks[j].text == "struct" and toks[j + 1].kind == "name"}
 
     # -- token helpers
     def peek(self, k=0):
@@ -468,31 +493,50 @@ class Parser:
 
     # -- top level
     def program(self):
-        fns = []
+        """Returns (fns, structs)."""
+        fns, structs = [], []
         while True:
             while self.at("nl"):
                 self.next()
             t = self.peek()
             if t.kind == "eof":
-                return fns
+                return fns, structs
             if t.kind == "kw" and t.text == "fn":
                 fns.append(self.fn_decl())
+                continue
+            if t.kind == "kw" and t.text == "struct":
+                structs.append(self.struct_decl())
+                continue
+            if t.kind == "name" and t.text in STRUCT_WORDS and self.at("name", k=1):
+                n = self.peek(1).text
+                self.d.error("syntax", f"`{t.text}` isn't a keyword; a type with fields is declared with `struct`",
+                             t.line, t.col, len(t.text), f"`struct {n}`, then one `field: Type` per line, then "
+                             f"`end struct {n}`")
+                structs.append(self.struct_decl(habit=True))
+                continue
+            if t.kind == "rbrace":
+                self.next()
+                self.d.error("stray-closer", "`}` doesn't close anything (and blocks end with `end <kind>`)",
+                             t.line, t.col, 1, "remove this line")
+                self.end_line()
                 continue
             if t.kind == "name" and t.text in FN_WORDS:
                 self.d.error("syntax", f"`{t.text}` isn't a keyword; functions are declared with `fn`",
                              t.line, t.col, len(t.text), "write `fn`")
                 fns.append(self.fn_decl())
                 continue
-            self.d.error("top-level", f"only `fn` declarations can appear at the top level, found {describe(t)}",
+            self.d.error("top-level", f"only `fn` and `struct` declarations can appear at the top level, found "
+                         f"{describe(t)}",
                          t.line, t.col, len(t.text))
             self.skip_line()
 
     def parse_type(self, ret=False):
         t = self.peek()
         if t.kind != "name":
-            self.fail("syntax", f"expected a type (Int, Bool, String or List[...]), found {describe(t)}", t)
+            self.fail("syntax", f"expected a type (Int, Bool, String, List[...] or a struct), found {describe(t)}", t)
         self.next()
-        if t.text in LIST_WORDS or (t.text not in TYPES and (self.at_op("[") or self.at_op("<"))):
+        if t.text in LIST_WORDS or (t.text not in TYPES and t.text not in self.struct_names
+                                    and (self.at_op("[") or self.at_op("<"))):
             return self.list_type(t)
         ty = self.simple_type(t, ret)
         if ty and self.at_op("[") and self.at_op("]", 1):  # Int[] (Java/C#)
@@ -522,17 +566,102 @@ class Parser:
         return f"List[{inner}]" if inner else None
 
     def simple_type(self, t, ret):
-        if t.text in TYPES:
+        if t.text in TYPES or t.text in self.struct_names:
             return t.text
         if t.text in NO_RETURN_TYPES:
             msg = "functions that return nothing leave out `-> ...`" if ret else f"`{t.text}` isn't a type"
             self.d.error("unknown-type", msg, t.line, t.col, len(t.text))
             return "Unit" if ret else None
-        hint = TYPE_HINTS.get(t.text) or next(iter(difflib.get_close_matches(t.text, TYPES, 1)), None)
-        self.d.error("unknown-type", f"unknown type `{t.text}`; the types are Int, Bool, String and List[...]",
+        known = list(TYPES) + sorted(self.struct_names)
+        hint = TYPE_HINTS.get(t.text) or next(iter(difflib.get_close_matches(t.text, known, 1)), None)
+        structs = f" and this file's structs ({', '.join(sorted(self.struct_names))})" if self.struct_names else ""
+        sep = "," if self.struct_names else " and"
+        self.d.error("unknown-type", f"unknown type `{t.text}`; the types are Int, Bool, String{sep} List[...]{structs}",
                      t.line, t.col,
                      len(t.text), f"write `{hint}`" if hint else None)
         return hint  # recover with the likely meaning, so one wrong name doesn't cascade
+
+    def struct_decl(self, habit=False):
+        """`struct Name`, one `field: Type` per line, `end struct Name` (D22). habit: the keyword was
+        `class`, `record`... (already reported), so the rest of the line is skipped quietly."""
+        kw = self.next()
+        name, name_tok, fields = "?", kw, []
+        try:
+            name_tok = self.expect_name("for the struct")
+            name = name_tok.text
+            if habit:
+                self.skip_line()
+            elif self.at_op(":") or self.at_op("("):
+                t = self.peek()
+                self.d.error("syntax", "the fields go on the lines below, one per line", t.line, t.col, len(t.text),
+                             f"`struct {name}`, then `field: Type` lines, then `end struct {name}`")
+                self.skip_line()
+            else:
+                self.end_line()
+        except ParseError:
+            self.skip_line()
+        self.stack.append(["struct", kw.line, name])
+        end_tok = None
+        while True:
+            while self.at("nl"):
+                self.next()
+            t = self.peek()
+            new_decl = t.kind == "name" and t.text in STRUCT_WORDS + FN_WORDS and self.at("name", k=1)
+            if t.kind == "eof" or (t.kind == "kw" and t.text in ("fn", "struct")) or new_decl:
+                more = "" if t.kind == "eof" else f" before the next `{t.text}`"
+                self.d.error("unclosed-block", f"`struct {name}` (line {kw.line}) is never closed{more}",
+                             t.line, t.col, max(1, len(t.text)), self.closer_fix("struct", name, kw.line, t.line))
+                break
+            if t.kind == "kw" and t.text == "end":
+                if self.closer_line() == "mine":
+                    end_tok = t
+                    break
+                continue
+            if t.kind == "rbrace":
+                self.rbrace("struct", name)
+                end_tok = t
+                break
+            if t.kind == "name" and t.text in CLOSER_WORDS and self.at("nl", k=1):
+                self.d.error("closer-kind", f"`{t.text}` isn't a keyword; write `end struct {name}`",
+                             t.line, t.col, len(t.text), f"`end struct {name}`")
+                self.skip_line()
+                break
+            try:
+                f = self.field_decl(name)
+                if f:
+                    fields.append(f)
+            except ParseError:
+                self.skip_line()
+        self.stack.pop()
+        return Node("struct", kw, name=name, name_tok=name_tok, fields=fields, end_tok=end_tok)
+
+    def field_decl(self, sname):
+        t = self.peek()
+        if t.kind == "kw" and t.text in ("let", "var"):
+            self.next()
+            self.d.error("syntax", f"fields are written without `{t.text}`: `name: Type`", t.line, t.col,
+                         len(t.text), "drop it; a struct's fields change only through a `var` holding the struct")
+            t = self.peek()
+        if t.kind != "name":
+            if t.kind == "kw" and t.text in ("fn",):
+                self.fail("syntax", "a struct holds only fields; functions go outside it, taking the struct as a "
+                          "parameter", t)
+            self.fail("syntax", f"a struct holds only fields, one per line (`name: Type`), found {describe(t)}", t)
+        if t.text in FN_WORDS:
+            self.fail("syntax", "a struct holds only fields; functions go outside it, taking the struct as a "
+                      "parameter", t)
+        self.next()
+        if self.at_op(","):
+            c = self.peek()
+            self.fail("syntax", "one field per line, each with its own type", c, f"`{t.text}: Type` on its own line")
+        self.expect_op(":", f"and a type after field `{t.text}`, e.g. `{t.text}: Int`")
+        ty = self.parse_type()
+        if self.at_op(",") or self.at_op(";"):
+            c = self.next()
+            self.d.error("syntax", f"fields don't end with `{c.text}`: one field per line", c.line, c.col, 1,
+                         "drop it")
+        self.end_line()
+        return (t.text, ty, t)
 
     def fn_decl(self):
         kw = self.next()
@@ -593,6 +722,9 @@ class Parser:
                 if how == "outer":
                     return stmts, "implicit", t
                 continue
+            if t.kind == "rbrace":
+                self.rbrace(kind, name)
+                return stmts, "end", t
             if t.kind == "name" and t.text in CLOSER_WORDS and self.at("nl", k=1):
                 k = CLOSER_WORDS[t.text]
                 self.d.error("closer-kind", f"`{t.text}` isn't a keyword; write `end {k}`",
@@ -622,6 +754,13 @@ class Parser:
                     stmts.append(s)
             except ParseError:
                 self.skip_line()
+
+    def rbrace(self, kind, name):
+        """A line that is only `}` closes the innermost block (recovery for brace habits)."""
+        t = self.next()
+        self.d.error("closer-kind", f"blocks don't use braces; this closes `{opener(kind, name)}`, which ends with "
+                     f"`{closer(kind, name)}`", t.line, t.col, 1, f"`{closer(kind, name)}`")
+        self.end_line()
 
     def closer_fix(self, kind, name, open_line, here):
         """Where does the missing closer go? Indentation has no meaning to the compiler, but it is
@@ -658,15 +797,15 @@ class Parser:
     def resolve_closer(self, k, start_tok, start):
         kind, line, name = self.stack[-1]
         if k == kind:
-            if kind == "fn":
+            if kind in ("fn", "struct"):
                 if self.at("name"):
                     nt = self.next()
                     if nt.text != name:
-                        self.d.error("closer-name", f"`end fn {nt.text}` is closing `fn {name}` (line {line})",
-                                     nt.line, nt.col, len(nt.text), f"`end fn {name}`")
+                        self.d.error("closer-name", f"`end {kind} {nt.text}` is closing `{kind} {name}` (line {line})",
+                                     nt.line, nt.col, len(nt.text), f"`end {kind} {name}`")
                 else:
-                    self.d.error("closer-name", "`end fn` must repeat the function's name",
-                                 start_tok.line, start_tok.col, 6, f"`end fn {name}`")
+                    self.d.error("closer-name", f"`end {kind}` must repeat the {'function' if kind == 'fn' else kind}'s"
+                                 " name", start_tok.line, start_tok.col, len(f"end {kind}"), f"`end {kind} {name}`")
             self.end_line()
             return "mine"
         if any(b[0] == k for b in self.stack[:-1]):
@@ -726,12 +865,12 @@ class Parser:
         e = self.expr()
         if self.at_op("="):
             eq = self.next()
-            if e.kind != "index":
-                self.fail("syntax", f"can't assign to `{render(e)}`; only a variable or a list item `xs[i]` can be "
-                          "assigned", eq)
+            if e.kind not in ("index", "field"):
+                self.fail("syntax", f"can't assign to `{render(e)}`; only a variable, a list item `xs[i]` or a field "
+                          "`p.x` can be assigned", eq)
             v = self.expr()
             self.end_line()
-            return Node("setindex", t, target=e, expr=v)
+            return Node("setindex" if e.kind == "index" else "setfield", t, target=e, expr=v)
         self.end_line()
         return Node("exprstmt", t, expr=e)
 
@@ -925,11 +1064,15 @@ class Parser:
 
     def primary(self):
         e = self.atom()
-        while self.at_op("["):
+        while self.at_op("[") or self.at_op("."):
             b = self.next()
-            i = self.expr()
-            self.expect_op("]", "to close the index")
-            n = Node("index", b, base=e, index=i)
+            if b.text == ".":
+                ft = self.expect_name("for the field after `.`")
+                n = Node("field", ft, base=e, name=ft.text)
+            else:
+                i = self.expr()
+                self.expect_op("]", "to close the index")
+                n = Node("index", b, base=e, index=i)
             n.start = e.start
             e = n
         return e
@@ -975,6 +1118,11 @@ class Parser:
             return Node("str", t, parts=parts)
         if t.kind == "name":
             self.next()
+            if t.text == "new" and self.at("name") and self.at_op("(", 1):
+                e = self.atom()
+                self.d.error("syntax", "there's no `new`: a struct is made by calling its name", t.line, t.col, 3,
+                             f"`{render(e)}`")
+                return e
             if self.at_op("("):
                 return self.call(t)
             return Node("name", t, name=t.text)
@@ -1064,19 +1212,63 @@ def sig(f, uses_io=None):
 
 
 class Checker:
-    def __init__(self, fns, d):
+    def __init__(self, fns, structs, d):
         self.d, self.fns, self.all = d, {}, fns
         self.in_example = False
+        self.structs = {}
+        for st in structs:
+            if st.name == "?":
+                continue
+            if st.name in TYPES or st.name in LIST_WORDS or st.name in BUILTINS:
+                self.err("reserved-name", f"`{st.name}` is built in and can't be redefined", st.name_tok)
+            elif st.name in self.structs:
+                self.err("duplicate-struct", f"`struct {st.name}` is already defined on line "
+                         f"{self.structs[st.name].tok.line}", st.name_tok)
+            else:
+                self.structs[st.name] = st
+            seen = {}
+            for fname, _, ftok in st.fields:
+                if fname in seen:
+                    self.err("duplicate-name", f"field `{fname}` is already declared on line {seen[fname]}", ftok)
+                seen.setdefault(fname, ftok.line)
+            if not st.fields:
+                self.err("empty-struct", f"`struct {st.name}` has no fields", st.name_tok,
+                         "add one `name: Type` line per field")
+        self.check_struct_cycles()
         for f in fns:
             if f.name == "?":
                 continue
             if f.name in BUILTINS:
                 self.err("reserved-name", f"`{f.name}` is built in and can't be redefined", f.name_tok)
+            elif f.name in self.structs:
+                self.err("duplicate-fn", f"`{f.name}` is already the name of the struct on line "
+                         f"{self.structs[f.name].tok.line}, and calling it makes one", f.name_tok)
             elif f.name in self.fns:
                 self.err("duplicate-fn", f"`fn {f.name}` is already defined on line {self.fns[f.name].tok.line}",
                          f.name_tok)
             else:
                 self.fns[f.name] = f
+
+    def check_struct_cycles(self):
+        """A struct can't contain itself except through a list: there's no null, so it could never be made."""
+        def direct(t):  # struct types reached without going through a List
+            return [t] if t in self.structs else []
+        reported = set()
+        for name, st in self.structs.items():
+            stack, seen = [(name, [name])], set()
+            while stack:
+                cur, path = stack.pop()
+                for fname, ft, ftok in self.structs[cur].fields:
+                    for nxt in direct(ft):
+                        if nxt == name and name not in reported:
+                            reported.update(path)
+                            via = " -> ".join(path + [name])
+                            self.err("recursive-struct", f"`{name}` contains itself ({via}), so one could never be "
+                                     "made: there's no null", st.name_tok,
+                                     f"hold the inner ones in a list, which can be empty: `{fname}: List[{ft}]`")
+                        elif nxt not in seen:
+                            seen.add(nxt)
+                            stack.append((nxt, path + [nxt]))
 
     def err(self, code, msg, tok, fix=None, length=None):
         self.d.error(code, msg, tok.line, tok.col, length or len(tok.text), fix)
@@ -1187,6 +1379,8 @@ class Checker:
                 self.err_at("type-mismatch", f"`{s.name}` is {v.ty}, but the value is {t}", s.expr)
         elif k == "setindex":
             self.setindex(s)
+        elif k == "setfield":
+            self.setfield(s)
         elif k == "return":
             ret = self.cur.ret
             if s.expr is None:
@@ -1306,6 +1500,9 @@ class Checker:
             self.expr(tgt.index)
             self.expr(s.expr)
             return
+        if base.kind == "field":
+            self.nested_assign(s, tgt, base, eval_base=False)  # already checked above
+            return
         if base.kind != "name":
             self.err_at("syntax", f"can't assign into `{render(base)}`; assign to a variable's item: `xs[i] = v`",
                         base)
@@ -1328,6 +1525,67 @@ class Checker:
         if ok and et and t and t != et:
             self.err_at("type-mismatch", f"`{base.name}` is {v.ty}, so its items are {et}, but the value is {t}",
                         s.expr)
+
+    def nested_assign(self, s, tgt, base, eval_base=True):
+        """grid[i][j] = v, ps[i].x = v, p.items[0] = v, a.b.c = v: one level at a time, since each level is
+        its own value (D19, D22)."""
+        tmp = base.name if base.kind == "field" else "item" if base.kind == "index" else "tmp"
+        if self.lookup(tmp) is not None:
+            tmp = "new_" + tmp
+        rest = f"[{render(tgt.index)}]" if tgt.kind == "index" else f".{tgt.name}"
+        self.err_at("nested-assign", "only one level can be assigned at a time", tgt,
+                    f"`var {tmp} = {render(base)}`, then `{tmp}{rest} = {render(s.expr)}`, then "
+                    f"`{render(base)} = {tmp}`")
+        if eval_base:
+            self.expr(base)
+        if tgt.kind == "index":
+            self.expr(tgt.index)
+        self.expr(s.expr)
+
+    def setfield(self, s):
+        tgt = s.target
+        base = tgt.base
+        if base.kind in ("field", "index"):
+            self.nested_assign(s, tgt, base)
+            return
+        if base.kind != "name":
+            self.err_at("syntax", f"can't assign into `{render(base)}`; assign to a variable's field: `p.x = v`",
+                        base)
+            return
+        v = self.lookup(base.name)
+        if v is None:
+            self.unknown_name(base.tok)
+            self.expr(s.expr)
+            return
+        base.ty = v.ty
+        ok = self.check_mutable(base.name, v, base.tok)
+        ft = self.field_type(tgt, v.ty)
+        t = self.expr(s.expr, want=ft)
+        if ok and ft and t and t != ft:
+            self.err_at("type-mismatch", f"`{render(tgt)}` is {ft}, but the value is {t}", s.expr)
+
+    def field_type(self, e, bt):
+        """The type of field e.name of a value of type bt, or None (reported)."""
+        if bt is None:
+            return None
+        b = render(e.base)
+        if bt not in self.structs:
+            fix = None
+            if (is_list(bt) or bt == "String") and e.name in ("len", "length", "size", "count"):
+                fix = f"`length({b})`"
+            what = "a list" if is_list(bt) else bt
+            self.err("no-field", f"`{b}` is {bt}; only structs have fields, and {what} has none", e.tok, fix)
+            return None
+        st = self.structs[bt]
+        for fname, ft, _ in st.fields:
+            if fname == e.name:
+                e.index_of = [f[0] for f in st.fields].index(fname)
+                return ft
+        names = [f[0] for f in st.fields]
+        sg = difflib.get_close_matches(e.name, names, 1)
+        self.err("no-field", f"`struct {bt}` has no field `{e.name}` (it has {', '.join(names)})", e.tok,
+                 f"did you mean `{b}.{sg[0]}`?" if sg else None)
+        return None
 
     def no_negative_index(self, e):
         i = e.index
@@ -1441,35 +1699,50 @@ class Checker:
             self.need(e.left, lt, "Bool", op)
             self.need(e.right, rt, "Bool", op)
             return "Bool"
+        if k == "field":
+            return self.field_type(e, self.expr(e.base))
         if k == "call":
             return self.call(e, want)
         return None
 
-    def match_args(self, name, pnames, e):
+    def match_args(self, name, pnames, e, what="parameter"):
         """Check argument names against the parameters (D4). Returns order, where order[i] is the index of the
         parameter args[i] fills, or None if the count is wrong (already reported)."""
         args = e.args
         names = [n for n, _, _ in args]
         want = f"`{name}({', '.join(p + ': ...' for p in pnames)})`"
+        decl = f"`fn {name}`" if what == "parameter" else f"`struct {name}`"
         if len(args) != len(pnames):
-            self.err("arg-count", f"`{name}` takes {len(pnames)} argument(s), but this call passes {len(args)}",
-                     e.tok, want)
+            if what == "field":
+                given = {n for n, _, _ in args}
+                missing = [p for p in pnames if p not in given]
+                miss = ""
+                if missing and None not in given:
+                    miss = f" (missing {', '.join(missing)})"
+                    by = {n: a for n, _, a in args}
+                    want = f"`{name}(" + ", ".join(f"{p}: {render(by[p]) if p in by else '...'}" for p in pnames) + ")`"
+                self.err("arg-count", f"`{name}` has {len(pnames)} field(s), and making one gives every field a "
+                         f"value, but this passes {len(args)}{miss}", e.tok, want)
+            else:
+                self.err("arg-count", f"`{name}` takes {len(pnames)} argument(s), but this call passes {len(args)}",
+                         e.tok, want)
             return None
         order = list(range(len(args)))
         if len(pnames) == 1:
             if names[0] is not None and names[0] != pnames[0]:
-                self.err("unknown-arg-name", f"`{name}`'s parameter is `{pnames[0]}`, not `{names[0]}`",
+                self.err("unknown-arg-name", f"`{name}`'s {what} is `{pnames[0]}`, not `{names[0]}`",
                          args[0][1], f"`{pnames[0]}: ...` or no name")
         elif len(pnames) > 1:
             if any(n is None for n in names):
                 fixed = f"{name}(" + ", ".join(f"{p}: {render(a)}" for p, (_, _, a) in zip(pnames, args)) + ")"
-                self.err("unnamed-arg", f"`{name}` takes more than one argument, so each one must be named",
+                self.err("unnamed-arg", f"`{name}` has more than one field, so each value is named with its field"
+                         if what == "field" else f"`{name}` takes more than one argument, so each one must be named",
                          e.tok, f"`{fixed}`")
             else:
                 bad = [(n, t) for n, t, _ in args if n not in pnames]
                 for n, t in bad:
                     sg = difflib.get_close_matches(n, pnames, 1)
-                    self.err("unknown-arg-name", f"`{name}` has no parameter `{n}` (it has {', '.join(pnames)})",
+                    self.err("unknown-arg-name", f"`{name}` has no {what} `{n}` (it has {', '.join(pnames)})",
                              t, f"did you mean `{sg[0]}`?" if sg else None)
                 if not bad:
                     if len(set(names)) != len(names):
@@ -1479,7 +1752,7 @@ class Checker:
                         if names != pnames:
                             by = {n: a for n, _, a in args}
                             fixed = f"{name}(" + ", ".join(f"{p}: {render(by[p])}" for p in pnames) + ")"
-                            self.err("arg-order", f"arguments must come in the order `fn {name}` declares them "
+                            self.err("arg-order", f"arguments must come in the order {decl} declares them "
                                      f"({', '.join(pnames)})", e.tok, f"`{fixed}`")
         return order
 
@@ -1511,11 +1784,13 @@ class Checker:
             return "Int"
         if name in ("append", "repeat"):
             return self.list_builtin(e, want)
+        if name in self.structs:
+            return self.construct(e)
         f = self.fns.get(name)
         if f is None:
             for _, _, a in e.args:
                 self.expr(a)
-            sugg = difflib.get_close_matches(name, list(self.fns) + list(BUILTINS), 1)
+            sugg = difflib.get_close_matches(name, list(self.fns) + list(BUILTINS) + list(self.structs), 1)
             fix = CALL_HINTS.get(name) or (f"did you mean `{sugg[0]}`?" if sugg else None)
             self.err("unknown-fn", f"there's no function `{name}`", e.tok, fix)
             return None
@@ -1534,6 +1809,24 @@ class Checker:
             elif pt and t and pt != t:
                 self.err_at("type-mismatch", f"`{name}`'s `{pn}` is {pt}, but `{render(a)}` is {t}", a)
         return f.ret
+
+    def construct(self, e):
+        """Point(x: 1, y: 2): every field, named, in the declared order, like any call (D4)."""
+        st = self.structs[e.name]
+        order = self.match_args(e.name, [f[0] for f in st.fields], e, what="field")
+        e.ctor = True
+        for i, (_, _, a) in enumerate(e.args):
+            if order is None:
+                self.expr(a)
+                continue
+            fn, ft, _ = st.fields[order[i]]
+            t = self.expr(a, want=ft)
+            if t == "Unit":
+                self.err_at("unit-value", f"`{render(a)}` returns nothing, so it can't be a field", a)
+            elif ft and t and ft != t:
+                self.err_at("type-mismatch", f"`{e.name}`'s `{fn}` is {ft}, but `{render(a)}` is {t}", a)
+        e.order = order
+        return e.name
 
     def list_builtin(self, e, want):
         """append(list: List[T], item: T) -> List[T]; repeat(item: T, times: Int) -> List[T]."""
@@ -1582,17 +1875,30 @@ CTYPE = {"Int": "int64_t", "Bool": "bool", "String": "const char *", "Unit": "vo
 SLOT = {"Int": "i", "Bool": "b", "String": "s"}
 
 
+STRUCT_IDS = {}  # struct name -> index in the runtime's cl_recs table; set by Emitter
+
+
+def is_ref(t):
+    """Lists and structs: a cl_list * with copy-on-write (D19, D22)."""
+    return bool(t) and (is_list(t) or t in STRUCT_IDS)
+
+
 def ctype(t):
-    return "cl_list *" if is_list(t) else CTYPE[t]
+    return "cl_list *" if is_ref(t) else CTYPE[t]
 
 
 def slot(t):
-    return "l" if is_list(t) else SLOT[t]
+    return "l" if is_ref(t) else SLOT[t]
 
 
 def desc(t):
-    """Type descriptor the runtime uses to show, compare and copy values: I, B, S, or L + item descriptor."""
-    return "L" + desc(elem(t)) if is_list(t) else t[0]
+    """Type descriptor the runtime uses to show, compare and copy values: I, B, S, L + item descriptor,
+    or R + the struct's index in cl_recs."""
+    if is_list(t):
+        return "L" + desc(elem(t))
+    if t in STRUCT_IDS:
+        return f"R{STRUCT_IDS[t]}"
+    return t[0]
 
 RUNTIME = r"""#include <stdarg.h>
 #include <stdbool.h>
@@ -1653,6 +1959,12 @@ static int64_t cl_str_len(const char *s) {  /* in Unicode code points */
 typedef struct cl_list cl_list;
 typedef union { int64_t i; bool b; const char *s; cl_list *l; } cl_val;
 struct cl_list { int64_t rc, len, cap; cl_val *items; };
+/* A struct value (D22) is a cl_list with one item per field, so it shares the lists' copy-on-write.
+   Descriptors: I, B, S, L + item descriptor, R + index into cl_recs. */
+typedef struct { const char *name; int n; const char *const *fields; const char *const *descs; } cl_rec_info;
+@RECS@
+#define CL_REF(d) ((d)[0] == 'L' || (d)[0] == 'R')
+static const cl_rec_info *cl_rec(const char *d) { return &cl_recs[atoi(d + 1)]; }
 static cl_list *cl_list_new(int64_t cap, int line, int col) {
     if (cap < 4) cap = 4;
     if (cap > ((int64_t)1 << 40) / (int64_t)sizeof(cl_val)) cl_trap("list too large", line, col);
@@ -1666,8 +1978,18 @@ static cl_list *cl_list_of(int n, ...) {
 static cl_list *cl_list_copy(cl_list *src, int64_t cap, const char *d) {
     cl_list *l = cl_list_new(cap > src->len ? cap : src->len, 0, 0);
     memcpy(l->items, src->items, sizeof(cl_val) * (size_t)src->len); l->len = src->len;
-    if (d[0] == 'L') for (int64_t i = 0; i < l->len; i++) l->items[i].l->rc++;
+    if (CL_REF(d)) for (int64_t i = 0; i < l->len; i++) l->items[i].l->rc++;
     return l; }
+static cl_list *cl_rec_copy(cl_list *src, const char *d) {
+    const cl_rec_info *r = cl_rec(d);
+    cl_list *l = cl_list_new(src->len, 0, 0);
+    memcpy(l->items, src->items, sizeof(cl_val) * (size_t)src->len); l->len = src->len;
+    for (int k = 0; k < r->n; k++) if (CL_REF(r->descs[k])) l->items[k].l->rc++;
+    return l; }
+static void cl_rec_set(cl_list **p, int k, cl_val v, const char *d) {
+    if ((*p)->rc > 1) { (*p)->rc--; *p = cl_rec_copy(*p, d); }
+    if (CL_REF(cl_rec(d)->descs[k])) (*p)->items[k].l->rc--;
+    (*p)->items[k] = v; }
 static void cl_unshare(cl_list **p, int64_t cap, const char *d) {
     if ((*p)->rc > 1) { (*p)->rc--; *p = cl_list_copy(*p, cap, d); } }
 static void cl_index_check(cl_list *l, int64_t i, int line, int col) {
@@ -1683,7 +2005,7 @@ static cl_val cl_list_get(cl_list *l, int64_t i, int line, int col) {
     cl_index_check(l, i, line, col); return l->items[i]; }
 static void cl_list_set(cl_list **p, int64_t i, cl_val v, const char *d, int line, int col) {
     cl_index_check(*p, i, line, col); cl_unshare(p, (*p)->len, d);
-    if (d[0] == 'L') (*p)->items[i].l->rc--;
+    if (CL_REF(d)) (*p)->items[i].l->rc--;
     (*p)->items[i] = v; }
 static void cl_list_push(cl_list **p, cl_val v, const char *d) {
     cl_unshare(p, (*p)->len * 2 + 1, d);
@@ -1699,7 +2021,7 @@ static cl_list *cl_list_repeat(cl_val v, int64_t n, const char *d, int line, int
     cl_list *l = cl_list_new(n, line, col);
     for (int64_t i = 0; i < n; i++) l->items[i] = v;
     l->len = n;
-    if (d[0] == 'L') v.l->rc += n - 1;
+    if (CL_REF(d)) v.l->rc += n - 1;
     return l; }
 static bool cl_list_eq(cl_list *a, cl_list *b, const char *d);
 static bool cl_val_eq(cl_val a, cl_val b, const char *d) {
@@ -1707,6 +2029,11 @@ static bool cl_val_eq(cl_val a, cl_val b, const char *d) {
     case 'I': return a.i == b.i;
     case 'B': return a.b == b.b;
     case 'S': return strcmp(a.s, b.s) == 0;
+    case 'R': {
+        if (a.l == b.l) return true;
+        const cl_rec_info *r = cl_rec(d);
+        for (int k = 0; k < r->n; k++) if (!cl_val_eq(a.l->items[k], b.l->items[k], r->descs[k])) return false;
+        return true; }
     default: return cl_list_eq(a.l, b.l, d + 1); } }
 static bool cl_list_eq(cl_list *a, cl_list *b, const char *d) {
     if (a == b) return true;
@@ -1732,6 +2059,14 @@ static void cl_show_into(cl_buf *b, cl_val v, const char *d) {
                           case '\t': e = "\\t"; break; case '{': e = "\\{"; break; case '}': e = "\\}"; break; }
             if (e) cl_put(b, e, 2); else cl_put(b, s, 1); }
         cl_put(b, "\"", 1); break;
+    case 'R': {  /* Point(x: 1, y: 2), the way one is made */
+        const cl_rec_info *r = cl_rec(d);
+        cl_put(b, r->name, strlen(r->name)); cl_put(b, "(", 1);
+        for (int k = 0; k < r->n; k++) {
+            if (k) cl_put(b, ", ", 2);
+            cl_put(b, r->fields[k], strlen(r->fields[k])); cl_put(b, ": ", 2);
+            cl_show_into(b, v.l->items[k], r->descs[k]); }
+        cl_put(b, ")", 1); break; }
     default:
         cl_put(b, "[", 1);
         for (int64_t i = 0; i < v.l->len; i++) {
@@ -1766,12 +2101,27 @@ ARITH_FN = {"+": "cl_add", "-": "cl_sub", "*": "cl_mul", "/": "cl_div", "%": "cl
 
 
 class Emitter:
-    def __init__(self, fns, path):
+    def __init__(self, fns, structs, path):
         self.fns, self.path = fns, path
+        self.structs = [st for st in structs if st.name != "?"]
+        STRUCT_IDS.clear()
+        STRUCT_IDS.update({st.name: i for i, st in enumerate(self.structs)})
         self.examples = [s for f in fns for s in f.body if s.kind == "example"]
 
+    def recs(self):
+        """The cl_recs table: each struct's name, field names and field descriptors."""
+        out, rows = [], []
+        for i, st in enumerate(self.structs):
+            out.append(f"static const char *const cl_rf{i}[] = {{" + ", ".join(c_string(f[0]) for f in st.fields)
+                       + "};")
+            out.append(f"static const char *const cl_rd{i}[] = {{" + ", ".join(c_string(desc(f[1])) for f in st.fields)
+                       + "};")
+            rows.append(f"{{{c_string(st.name)}, {len(st.fields)}, cl_rf{i}, cl_rd{i}}}")
+        out.append("static const cl_rec_info cl_recs[] = {" + (", ".join(rows) or "{0}") + "};")
+        return "\n".join(out)
+
     def emit(self):
-        out = [RUNTIME.replace("@FILE@", json.dumps(self.path))]
+        out = [RUNTIME.replace("@FILE@", json.dumps(self.path)).replace("@RECS@", self.recs())]
         for f in self.fns:
             out.append(self.proto(f) + ";")
         self.tmp = 0
@@ -1790,10 +2140,10 @@ class Emitter:
         for i, s in enumerate(self.examples):
             out.append(f'    printf("EXRUN {i}\\n"); fflush(stdout);')
             e = s.expr
-            if e.kind == "bin" and e.op == "==" and not e.paren and is_list(e.left.ty):
+            if e.kind == "bin" and e.op == "==" and not e.paren and is_ref(e.left.ty):
                 d = c_string(desc(e.left.ty))
                 out.append(f"    {{ cl_list *l = {self.expr(e.left)}; cl_list *r = {self.expr(e.right)};")
-                out.append(f'      if (!cl_list_eq(l, r, {c_string(desc(elem(e.left.ty)))})) {{ printf("EXFAILV {i} "); '
+                out.append(f'      if (!cl_val_eq((cl_val){{.l = l}}, (cl_val){{.l = r}}, {d})) {{ printf("EXFAILV {i} "); '
                            f"cl_hex(cl_show((cl_val){{.l = l}}, {d})); putchar(' '); "
                            f"cl_hex(cl_show((cl_val){{.l = r}}, {d})); putchar('\\n'); failed++; }} }}")
             elif e.kind == "bin" and e.op == "==" and not e.paren and e.left.ty == "String":
@@ -1836,6 +2186,10 @@ class Emitter:
                                f"{c_string(desc(elem(e.ty)))});")
                 else:
                     out.append(f"{ind}v_{s.name} = {self.own(e)};")
+            elif k == "setfield":
+                t = s.target
+                out.append(f"{ind}cl_rec_set(&v_{t.base.name}, {t.index_of}, {self.val(s.expr, own=True)}, "
+                           f"{c_string(desc(t.base.ty))});")
             elif k == "setindex":
                 t = s.target
                 out.append(f"{ind}cl_list_set(&v_{t.base.name}, {self.expr(t.index)}, {self.val(s.expr, own=True)}, "
@@ -1874,7 +2228,7 @@ class Emitter:
         v = f"v_{s.var}"
         if s.src is not None:
             L, K = f"cl_l{n}", f"cl_k{n}"
-            shared = s.src.kind in ("name", "index")
+            shared = s.src.kind in ("name", "index", "field")
             # A snapshot: changing the list inside the loop copies it, so the loop sees the original (D19).
             out.append(f"{ind}{{ cl_list *{L} = {self.own(s.src)};")
             if s.rev:
@@ -1903,7 +2257,7 @@ class Emitter:
         """C for e when the result is stored (a variable, list slot or return value): a list read from a
         variable or another list is shared, so a later mutation of either copies first (D19)."""
         c = self.expr(e)
-        if is_list(e.ty) and e.kind in ("name", "index"):
+        if is_ref(e.ty) and e.kind in ("name", "index", "field"):
             return f"cl_share({c})"
         return c
 
@@ -1927,6 +2281,8 @@ class Emitter:
             if not e.items:
                 return "cl_list_of(0)"
             return f"cl_list_of({len(e.items)}, " + ", ".join(self.val(x, own=True) for x in e.items) + ")"
+        if k == "field":
+            return f"({self.expr(e.base)})->items[{e.index_of}].{slot(e.ty)}"
         if k == "index":
             return (f"cl_list_get({self.expr(e.base)}, {self.expr(e.index)}, {e.tok.line}, {e.tok.col})"
                     f".{slot(e.ty)}")
@@ -1951,6 +2307,9 @@ class Emitter:
                 return f"{ARITH_FN[e.op]}({l}, {r}, {e.tok.line}, {e.tok.col})"
             if e.op in ("==", "!=") and e.left.ty == "String":
                 return f"(strcmp({l}, {r}) {e.op} 0)"
+            if e.op in ("==", "!=") and e.left.ty in STRUCT_IDS:
+                return (f"({'' if e.op == '==' else '!'}cl_val_eq((cl_val){{.l = {l}}}, (cl_val){{.l = {r}}}, "
+                        f"{c_string(desc(e.left.ty))}))")
             if e.op in ("==", "!=") and is_list(e.left.ty):
                 return f"({'' if e.op == '==' else '!'}cl_list_eq({l}, {r}, {c_string(desc(elem(e.left.ty)))}))"
             op = {"and": "&&", "or": "||"}.get(e.op, e.op)
@@ -1958,7 +2317,7 @@ class Emitter:
         if k == "call":
             if e.name == "print":
                 a = e.args[0][2]
-                if is_list(a.ty):
+                if is_ref(a.ty):
                     return f"cl_print_str({self.show(a)})"
                 kind = {"Bool": "bool", "String": "str"}.get(a.ty, "int")
                 return f"cl_print_{kind}({self.expr(a)})"
@@ -1972,6 +2331,11 @@ class Emitter:
                     return f"cl_list_appended({self.expr(by['list'])}, {self.val(by['item'], own=True)}, {d})"
                 return (f"cl_list_repeat({self.val(by['item'], own=True)}, {self.expr(by['times'])}, {d}, "
                         f"{e.tok.line}, {e.tok.col})")
+            if getattr(e, "ctor", False):  # Point(x: 1, y: 2): fields in declared order
+                vals = [None] * len(e.args)
+                for i, (_, _, a) in enumerate(e.args):
+                    vals[e.order[i]] = self.val(a, own=True)
+                return f"cl_list_of({len(vals)}, " + ", ".join(vals) + ")"
             # Arguments are borrowed: parameters can't change, and storing one anywhere shares it.
             return f"f_{e.name}(" + ", ".join(self.expr(a) for _, _, a in e.args) + ")"
         raise AssertionError(f"can't emit {k}")
@@ -1982,13 +2346,13 @@ class Emitter:
 
 def front_end(path, src):
     d = Diags(path, src)
-    fns = Parser(lex(src, d), d).program()
+    fns, structs = Parser(lex(src, d), d).program()
     try:
-        Checker(fns, d).run()
+        Checker(fns, structs, d).run()
     except Exception:
         if not d.has_errors():  # a crash on a clean parse is a compiler bug
             raise
-    return d, fns
+    return d, fns, structs
 
 
 def render_string(v):
@@ -2061,12 +2425,12 @@ def main(argv=None):
     except OSError as ex:
         print(f"clc: can't read {args.file}: {ex.strerror}", file=sys.stderr)
         return 2
-    d, fns = front_end(args.file, src)
+    d, fns, structs = front_end(args.file, src)
     if d.has_errors() or args.command == "check":
         d.report(args.json)
         return 1 if d.has_errors() else 0
 
-    em = Emitter(fns, args.file)
+    em = Emitter(fns, structs, args.file)
     csrc = em.emit()
     tmp = tempfile.mkdtemp(prefix="clc-")
     keep_tmp = False

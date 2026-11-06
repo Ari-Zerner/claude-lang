@@ -97,13 +97,25 @@ design and its decisions (D1...).
   Sonnet named the arguments in every `example` line this time, including the `contains`/`join`
   calls it missed before, so the SPEC sentence added in step 2 worked.
 
+- 2026-11-06 (night 2, step 5): **structs (D22).** `struct Point` / `x: Int` lines /
+  `end struct Point`; `Point(x: 1, y: 2)` with D4's naming rule; `p.x`, `p.x = v` one level deep;
+  values with copy-on-write (a struct is a `cl_list` with one slot per field, descriptor `R<n>`
+  into a `cl_recs` table); `==` and `print` (`Point(x: 1, y: 2)`). Fields can be structs and lists,
+  and a type may name a struct declared later (the parser pre-scans struct names); `x: Node` inside
+  `Node` is `recursive-struct` with the `List[Node]` fix. Habit fixes: `class`/`record`/`type`,
+  `var` on a field, trailing `,`, `Point(1, 2)`, `Point { x: 1 }`, `new`, missing fields (named,
+  with the given values filled in), `xs.length`, `a.b.c = v` / `ps[i].x = v` / `p.items[0] = v`.
+  A line that is only `}` now closes the innermost block with `closer-kind` (helps every block, not
+  just structs). 21 tests; SPEC ~2.1k tokens.
+
 ## Next step
-1. Records (structs): a `type Point = record x: Int, y: Int`-style declaration (decide the syntax
-   in DESIGN.md first; value semantics like lists, field update `p.x = 3` one level at a time,
-   construction with named fields as D4 would suggest), then a small trial that baits
-   other languages' habits (classes, methods, `new`, positional construction).
+1. **Struct trial**: a `--set structs` of ~10 tasks that bait other languages' habits (a class
+   with methods, positional construction, `ps[i].score += 1`-style nested updates, a struct
+   holding a list, a tree, equality, printing). The question to answer: how often does the
+   one-level rule (`nested-assign`) cost a round, and is the three-line rewrite what models write
+   after the fix? If it's frequent, implement general assignment paths (DESIGN D22).
 2. Bigger-program trials (a 100+ line task), a wrong-but-compiles trial, holes (D9), the
-   formatter (D12). Parsing (`parse_int(s) -> Result`) needs D7's Result.
+   formatter (D12). Parsing (`parse_int(s) -> Result`) needs D7's Result; enums/`match` with it.
 
 Known gaps: no list concatenation; no string iteration or indexing; nothing is freed; the `.cl`
 extension clashes with OpenCL, so the name is still provisional.

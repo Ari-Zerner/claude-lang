@@ -133,6 +133,31 @@ Claude differs from a human programmer in ways that matter for language design:
   `break` and `continue` apply to the innermost loop; no labels. `range(...)`, `1 to n`,
   `0..n`, C-style headers and `for i, x in ...` each get a targeted fix.
 
+- **D22. Structs: `struct Name` ... `end struct Name`, made with named fields, values like lists.**
+  (2026-11-06)
+  - *`struct`, not `record` or `class`.* In C, Go, Rust, Swift and C#, `struct` already means a
+    plain aggregate copied by value, which is exactly the semantics here; `class` would promise
+    methods, inheritance and shared references. `class`, `record`, `type`, `data` get the fix.
+  - *Construction is a call, with D4's rule:* `Point(x: 1, y: 2)`, every field named, in order.
+    Positional `Point(1, 2)` is the classic swapped-field bug. It's the form Swift and Kotlin use,
+    and calling it a call means there's nothing new to learn; `Point { x: 1, y: 2 }` (Rust, Go)
+    and `new Point(...)` get the rewritten call as their fix. No defaults: missing fields are
+    named in the error, with the given ones filled in.
+  - *Value semantics, the same as lists (D19):* a struct value is a `cl_list` with one slot per
+    field, so sharing, copy-on-write and the over-counting rule all carry over unchanged. A
+    million `c.n = c.n + i` updates run in place (0.07 s with 100k list-of-struct rewrites).
+  - *`p.x = v` only one level deep, like `xs[i] = v`.* `l.start.x = v`, `ps[i].x = v` and
+    `p.items[0] = v` get the three-line rewrite (`var start = l.start` ...). This is the
+    restriction most likely to cost: `ps[i].score = ...` is common. Revisit with trial data;
+    general paths are implementable (make each level unique on the way down).
+  - *No methods.* Functions take the struct as a parameter, so there is one way to call
+    anything; `p.area()` stays a `method-call` error.
+  - A struct can contain itself only through a list (`children: List[Tree]`): with no null, a
+    direct `next: Node` could never be made, so it's an error that suggests the list.
+  - `print` shows `Point(x: 1, y: 2)`, the way one is made, so output reads back as code.
+  - Brace habits recover: a line that is only `}` closes the innermost block, and the error
+    names the right closer (`end struct Point`).
+
 ## Open questions
 
 - Memory management: value semantics with copy-on-write (D19); nothing is freed yet.

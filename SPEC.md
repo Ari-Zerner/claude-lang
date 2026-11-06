@@ -5,7 +5,7 @@ something isn't described here, it doesn't exist yet.
 
 ## Programs
 
-A program is one `.cl` file of functions. It starts at `fn main()`. Comments start with `#` and
+A program is one `.cl` file of functions and structs. It starts at `fn main()`. Comments start with `#` and
 run to the end of the line.
 
 ```
@@ -28,8 +28,8 @@ end fn main
 - **One statement per line.** No `;`, no line continuation. Indentation is not significant
   (use two spaces per level by convention).
 - **Blocks have no braces and no `:`.** A block starts with its keyword line and ends with a
-  closer that names it: `end if`, `end while`, `end for`, `end fn <name>` (repeating the
-  function's name).
+  closer that names it: `end if`, `end while`, `end for`, `end fn <name>` and
+  `end struct <name>` (repeating the name).
 
 ## Types
 
@@ -39,8 +39,9 @@ end fn main
 | `Bool` | `true`, `false` |
 | `String` | text in double quotes, e.g. `"Hello, {name}!"` |
 | `List[T]` | a list of `T`s, e.g. `[1, 2, 3]` is `List[Int]`; `List[List[String]]` nests |
+| a struct | a type you declare, with named fields (see Structs) |
 
-There are no other types yet: no floats, records, maps, null. Nothing converts implicitly
+There are no other types yet: no floats, maps, enums, null. Nothing converts implicitly
 (an `Int` is never used as a `Bool`).
 
 ## Strings
@@ -91,6 +92,25 @@ fn main() uses io
 end fn main
 ```
 
+## Structs
+
+```
+struct Point
+  x: Int
+  y: Int
+end struct Point
+```
+
+- Declared at the top level, one `field: Type` per line. A field can be any type, including a
+  struct or a list (`children: List[Tree]`).
+- **Make one by calling its name with every field named**, in the declared order:
+  `Point(x: 1, y: 2)`. There's no `new` and no `Point { ... }`.
+- `p.x` reads a field; `p.x = 5` changes one field of a `var`. Only one level at a time:
+  `var s = line.start`, `s.x = 5`, `line.start = s` (the same for `ps[i].x = 5`).
+- Structs are values, like lists: `var q = p` copies, and a function can't change one it's given.
+- `==` compares every field; `print` and `{p}` show `Point(x: 1, y: 2)`.
+- There are no methods: write a function that takes the struct, `fn area(r: Rect) -> Int`.
+
 ## Functions
 
 ```
@@ -134,6 +154,7 @@ end fn name
 | `break` / `continue` | leave the innermost loop / skip to its next round |
 | `f(args)` | call a function for its effect |
 | `xs[i] = expr` | change one item of a `var` list |
+| `p.x = expr` | change one field of a `var` struct |
 | `print(x)` | built in: prints any value and a newline; needs `uses io` |
 
 ```

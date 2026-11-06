@@ -1,0 +1,10 @@
+Point(x: 1, y: 2)
+Point(x: 1, y: 10)
+Point(x: 6, y: 2)
+true
+Player(name: "Ada \"A\"", pos: Point(x: 1, y: 2), scores: [1, 2, 3])
+Ada "A" then Bob, at 1
+[Point(x: 99, y: 2), Point(x: 1, y: 10)]
+Point(x: 1, y: 2)
+9
+Tree(value: 1, children: [Tree(value: 3, children: []), Tree(value: 2, children: [Tree(value: 3, children: [])])])
