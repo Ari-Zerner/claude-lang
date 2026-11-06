@@ -61,11 +61,29 @@ design and its decisions (D1...).
   `1.5`. Also D20: a line with a lexical error reports only that error. 17 tests.
   SPEC.md ~1.7k tokens.
 
+- 2026-11-06 (night 2, step 2): **list trial** (`--set lists`, 11 tasks, several baiting other
+  languages' habits: last item, joining lists, a nested change, mutating a copy). Two harness
+  fixes first: the prompt now says to print bare output (5 "failures" were correct programs that
+  printed labels), and `extract()` takes the block with `fn main` (Sonnet's first reply had a stub
+  block ahead of the real one). Clean result: **Haiku 11/11 first try; Sonnet 9/11 first try,
+  11/11 after one fix.** Findings:
+  - **No habit leaked.** Nobody wrote a method, list `+`, `xs[-1]` or `grid[i][j] = v`: last items
+    were `xs[length(xs) - 1]`, the grid change was done one level at a time, `doubled` copied with
+    `var ys = xs` before changing it, and join was an append loop. The spec's Lists section works
+    as written, so the habit diagnostics are a safety net that hasn't been needed yet.
+  - **Sonnet's two misses were unnamed two-argument calls** (`contains([1, 2, 3], 2)`,
+    `join([1, 2], [3, 4, 5])`), fixed in one round from the `fix:` line. In `dedupe` it named the
+    arguments in the body but not in the `example` lines, so examples seem to read as test notation.
+    SPEC now says examples name arguments like any other call. D4 stays: the cost is one round.
+  - **The cost is loop boilerplate.** Every list loop is `var i = 0` / `while i < length(xs)` /
+    `i = i + 1`, and "is x in the list" uses a `seen` flag or an early `return` from a helper,
+    since there's no `break`. Nobody forgot the increment, but it's the most repeated pattern by far.
+
 ## Next step
-1. **Trial with list tasks** (`trials/trial.py`, a new `--set lists`): see what Haiku and Sonnet
-   reach for when they have lists (a `for` loop? methods? `+`?) and whether the D19 fixes land.
-2. `for` over a list or a range, and `break` (the flag-variable workaround is verbose). Decide
-   from what the trial shows.
+1. **`for` and `break`.** Proposal to settle in DESIGN first: `for x in xs ... end for` over items;
+   `for i in 0 until n` (exclusive) and `for i in 1 through n` (inclusive), never a bare `to`, whose
+   inclusiveness differs between languages; `break` and maybe `continue`. Then rerun the list trial
+   and compare line counts.
 3. Records (structs), then bigger-program trials, a wrong-but-compiles trial, holes (D9), the
    formatter (D12). Parsing (`parse_int(s) -> Result`) needs D7's Result.
 

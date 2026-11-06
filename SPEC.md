@@ -109,7 +109,7 @@ end fn name
 - **`example` lines** go right after the `fn` line, before the body. Each is a `Bool`
   expression, usually `f(...) == expected`. The compiler runs every example on every build, and
   a false one is a compile error. Examples can't see parameters or call `uses io` functions;
-  write the values out.
+  write the values out. Calls in examples name their arguments like any other call.
 
 ## Calls
 

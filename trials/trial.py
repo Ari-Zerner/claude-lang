@@ -5,7 +5,7 @@ For each task: ask a headless `claude -p` (no tools) for a program, compile it w
 and if it fails, hand back the diagnostics once and ask for a fixed version. Every attempt,
 diagnostic and output is written to trials/results/<run>.md; those mistakes are design input.
 
-  python3 trials/trial.py [--set basic|hard] [--model sonnet] [--only NAME ...]
+  python3 trials/trial.py [--set basic|hard|lists] [--model sonnet] [--only NAME ...]
 """
 import argparse
 import datetime
@@ -54,7 +54,33 @@ HARD = [
     ("table", "Print a multiplication table for 1 to 4: four lines, each with the four products "
      "separated by single spaces.", "1 2 3 4\n2 4 6 8\n3 6 9 12\n4 8 12 16\n"),
 ]
-SETS = {"basic": BASIC, "hard": HARD}
+# Tasks that need lists (D19), several aimed at other languages' habits: methods, `+` on lists,
+# negative indexing, nested assignment, `[0] * n`, and aliasing.
+LISTS = [
+    ("fib-list", "Build a list of the first 10 Fibonacci numbers (starting 0, 1) and print the list.",
+     "[0, 1, 1, 2, 3, 5, 8, 13, 21, 34]\n"),
+    ("reverse", "Write a function that returns a list in reverse order. Print the reverse of [1, 2, 3, 4, 5].",
+     "[5, 4, 3, 2, 1]\n"),
+    ("sieve", "Use the sieve of Eratosthenes (a list of Bools) to find the primes below 100. Print how many "
+     "there are, then the largest one.", "25\n97\n"),
+    ("dedupe", "Remove duplicates from [3, 1, 3, 2, 1, 5], keeping the first occurrence of each, and print "
+     "the resulting list.", "[3, 1, 2, 5]\n"),
+    ("words", "Given the list of words apple, kiwi, banana, fig: print the longest word, then the total "
+     "number of characters in all the words.", "banana\n18\n"),
+    ("last-two", "Print the last item of [4, 8, 15, 16, 23, 42], then the second-to-last.", "42\n23\n"),
+    ("join", "Write a function that joins two lists of Ints into one. Print the result of joining [1, 2] "
+     "and [3, 4, 5].", "[1, 2, 3, 4, 5]\n"),
+    ("grid", "Build a 3 by 3 grid (a list of lists) where the item in row i, column j is i * j (counting "
+     "from 0). Then change the middle item to 100 and print the grid.", "[[0, 0, 0], [0, 100, 2], [0, 2, 4]]\n"),
+    ("doubled", "Write a function that takes a list of Ints and returns it with its first item doubled. "
+     "Call it on a list holding 1, 2, 3, then print the result, then print the original list.",
+     "[2, 2, 3]\n[1, 2, 3]\n"),
+    ("sort", "Sort [5, 2, 8, 1, 9, 3] with a sorting algorithm you write yourself and print the sorted list.",
+     "[1, 2, 3, 5, 8, 9]\n"),
+    ("merge", "Write a function that merges two sorted lists into one sorted list. Print the merge of "
+     "[1, 4, 9] and [2, 3, 10, 11].", "[1, 2, 3, 4, 9, 10, 11]\n"),
+]
+SETS = {"basic": BASIC, "hard": HARD, "lists": LISTS}
 
 PROMPT = """Below is the complete specification of a new programming language, claude-lang.
 You have never seen it before; rely only on this spec.
@@ -66,6 +92,7 @@ You have never seen it before; rely only on this spec.
 Task: write a complete claude-lang program that does this:
 {task}
 
+Print exactly what the task asks for, with no labels or other text.
 Reply with only the program, in one ```cl code block."""
 
 FIX_PROMPT = """Below is the complete specification of a new programming language, claude-lang.
@@ -109,8 +136,10 @@ def claude(prompt, model):
 
 
 def extract(reply):
-    m = re.search(r"```[a-zA-Z]*\n(.*?)```", reply, re.S)
-    return (m.group(1) if m else reply).strip() + "\n"
+    """The program in a reply: the code block with `fn main` (the last such), else the last block."""
+    blocks = re.findall(r"```[a-zA-Z]*\n(.*?)```", reply, re.S)
+    mains = [b for b in blocks if "fn main" in b]
+    return ((mains or blocks or [reply])[-1]).strip() + "\n"
 
 
 def attempt(code, tmp):
