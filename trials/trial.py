@@ -80,7 +80,36 @@ LISTS = [
     ("merge", "Write a function that merges two sorted lists into one sorted list. Print the merge of "
      "[1, 4, 9] and [2, 3, 10, 11].", "[1, 2, 3, 4, 9, 10, 11]\n"),
 ]
-SETS = {"basic": BASIC, "hard": HARD, "lists": LISTS}
+STRUCTS = [  # each baits a habit: methods, in-place nested updates, mutation through a parameter, aliasing
+    ("point-move", "Define a point type with x and y. Write a function that returns a point moved by dx and dy. "
+     "Move the point (2, 3) by (1, -1) and print the new point's x, then its y, on separate lines.", "3\n2\n"),
+    ("rect", "Define a rectangle type with a width and a height, with ways to compute its area and its "
+     "perimeter. Print the area, then the perimeter, of a 3 by 4 rectangle.", "12\n14\n"),
+    ("scores", "Keep a list of players, each with a name and a score: Ann, Bob and Cy, all starting at 0. Add 5 "
+     "to Bob's score twice and 3 to Cy's score once, then print each player as their name and score, like "
+     "`Ann 0`, one per line.", "Ann 0\nBob 10\nCy 3\n"),
+    ("bank", "An account has an owner and a balance. Write a function that deposits an amount into an account. "
+     "Open an account for Dee with balance 100, deposit 50 into it, then print its balance.", "150\n"),
+    ("copy", "Make a point p at (1, 2). Make q a copy of p, then set q's x to 10. Print p's x, then q's x.",
+     "1\n10\n"),
+    ("segment", "A line segment has a start point and an end point. Write a function that returns a segment's "
+     "squared length. Make the segment from (3, 4) to (6, 8) and print its squared length; then change its "
+     "start point's x to 0 and print its squared length again.", "25\n52\n"),
+    ("inventory", "An inventory has an owner's name and a list of item names. Write a function that adds an item "
+     "to an inventory. Start Eve with an empty inventory, add sword, then shield, then print the number of "
+     "items, then the last item.", "2\nshield\n"),
+    ("tree", "Define a tree where each node has an Int value and any number of children. Build the tree whose "
+     "root is 1, with children 2 (whose children are 4 and 5) and 3. Print the sum of all values, then the "
+     "tree's depth (a single node has depth 1).", "15\n3\n"),
+    ("equal", "Make two points at (1, 2) and a third at (2, 1). Print whether the first two are equal, then "
+     "whether the first and third are equal.", "true\nfalse\n"),
+    ("book", "Define a struct named Book with fields title (a String) and year (an Int), in that order. Make the "
+     "book Dune from 1965 and print it by passing the struct itself to print.",
+     'Book(title: "Dune", year: 1965)\n'),
+    ("by-age", "People have a name and an age: Ann is 31, Bob is 25, Cy is 40. Sort them by age, youngest first, "
+     "with a sort you write yourself, and print their names, one per line.", "Bob\nAnn\nCy\n"),
+]
+SETS = {"basic": BASIC, "hard": HARD, "lists": LISTS, "structs": STRUCTS}
 
 PROMPT = """Below is the complete specification of a new programming language, claude-lang.
 You have never seen it before; rely only on this spec.

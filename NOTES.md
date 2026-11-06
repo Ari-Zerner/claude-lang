@@ -108,12 +108,28 @@ design and its decisions (D1...).
   A line that is only `}` now closes the innermost block with `closer-kind` (helps every block, not
   just structs). 21 tests; SPEC ~2.1k tokens.
 
+- 2026-11-06 (night 2, step 6): **struct trial** (`--set structs`, 11 tasks baiting methods,
+  positional construction, nested updates, mutation through a parameter, aliasing;
+  `2026-11-06-1500-structs-haiku`, `-1502-structs-sonnet`): **both 10/11 first try, 11/11 after one
+  fix**, and the miss is the same task for both: `scores`, where both wrote
+  `ps[i].score = ps[i].score + 5` (Haiku three times, Sonnet inside a loop), although SPEC names
+  that exact case as not allowed. All four errors across both runs are `nested-assign`. Both
+  recovered from the fix in one round. Everything else held: `segment` copied SPEC's worked example
+  (`var s = seg.start` / `s.x = 0` / `seg.start = s`) nearly verbatim on the first try; `bank`
+  returned a new account rather than mutating its parameter; `rect` used plain functions, no
+  methods; `copy`, `tree`, `book` (print format) and `by-age` passed. So a full worked example is
+  followed, a parenthetical "the same for `ps[i].x`" isn't, and the habit is strongest exactly
+  where structs are most used (a list of records). The fix text also has two flaws: it leaves
+  `ps[i]` in the right-hand side (`item.score = ps[i].score + 5`), and applied literally three
+  times it would declare `var item` three times, which no-shadowing rejects.
+
 ## Next step
-1. **Struct trial**: a `--set structs` of ~10 tasks that bait other languages' habits (a class
-   with methods, positional construction, `ps[i].score += 1`-style nested updates, a struct
-   holding a list, a tree, equality, printing). The question to answer: how often does the
-   one-level rule (`nested-assign`) cost a round, and is the three-line rewrite what models write
-   after the fix? If it's frequent, implement general assignment paths (DESIGN D22).
+1. **General assignment paths** (the struct trial's verdict on D22's open point):
+   `ps[i].score = v`, `a.b.c = v`, `grid[i][j] = v`, `p.items[0] = v`. Emit: take `&v_base`, then at
+   each level make that level unique (`cl_unshare` / record copy if rc > 1) and step to the slot's
+   address, with index checks; then store. Value semantics stay (each level is copied only if shared).
+   Then drop `nested-assign` and SPEC's "one level at a time" lines (fewer tokens), update D19/D22,
+   and rerun `--set structs --only scores segment` plus the lists `grid` task.
 2. Bigger-program trials (a 100+ line task), a wrong-but-compiles trial, holes (D9), the
    formatter (D12). Parsing (`parse_int(s) -> Result`) needs D7's Result; enums/`match` with it.
 
