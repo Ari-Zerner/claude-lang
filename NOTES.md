@@ -203,6 +203,10 @@ design and its decisions (D1...).
    DESIGN.md open questions): contracts (`requires`/`ensures`), build-time counterexample search,
    then proofs. Choose the backend first (Lean 4 core vs Z3; Lean's memory still to be measured,
    pending Ari's OK to run it). Pairs with the wrong-but-compiles trial.
+   Ari's sanity check (2026-11-07): "is this buying Claude anything over just writing in Lean
+   directly?" Proposed (waiting on Ari): before building the verifier, a **baseline trial with
+   Claude writing proved Lean directly** on the same tasks; and, first, a **Python baseline** of
+   the existing trial sets, since no trial yet compares claude-lang with an existing language.
 3. Maybe `join` / `contains` built-ins. Then a wrong-but-compiles trial, holes (D9), the
    formatter (D12). `parse_int(s) -> Result[Int, String]` is now possible (Result exists).
 4. Small cleanups seen in part (b): the `if let` cascade (bound name undefined) and the extra
