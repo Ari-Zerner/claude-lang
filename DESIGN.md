@@ -169,8 +169,8 @@ Claude differs from a human programmer in ways that matter for language design:
   through `big[0].tags` run in well under a second). The next likely habit, `for p in ps` then
   `p.score = ...`, is an error that says `p` is a copy and gives the index loop.
 
-- **D24. Enums with payloads, `Option[T]` and `Result[T, E]`, and `match`.** (2026-11-07; design
-  only, not built yet.) The big trial's clearest signal: every one of 8 programs had a find
+- **D24. Enums with payloads, `Option[T]` and `Result[T, E]`, and `match`.** (2026-11-07; enums
+  and `match` built, `Option`/`Result` next.) The big trial's clearest signal: every one of 8 programs had a find
   function returning `-1` or `""` for "not found". That's C's idiom, and it's exactly the
   confident-but-wrong territory of point 5: nothing makes the caller check. D7 promised `Result`
   and exhaustive `match`; this is the concrete form.
@@ -240,6 +240,11 @@ Claude differs from a human programmer in ways that matter for language design:
     item 0 is the variant's tag, items 1.. its fields. `Option` is the same with tags 0/1.
     Descriptors: `E<n>` indexes a `cl_enums` table (variant names, field names, field
     descriptors), `O` + T for `Option`, `Q` + T + E for `Result`.
+  - *Built so far:* enums can be recursive (`Add(left: Expr, right: Expr)`) since every value is
+    built bottom-up and never changed in place, so no cycle can form. `case Move(a, b)` (positional
+    names that aren't fields) is `unnamed-bind` with the renaming fix `case Move(dx: a, dy: b)`.
+    A bound name returned from a function is shared, not moved, since it's borrowed from the
+    matched value.
   - *Not decided, waiting for trial data:* a one-line unpack (`if let`-style, a `guard`, a
     `value_or(option:, default:)`), `match` as an expression, `?` for `Result` (D7: it's concise
     but hides control flow), and literal patterns (`case "go"`, `case 0`) for Int and String.

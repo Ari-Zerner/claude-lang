@@ -170,9 +170,19 @@ design and its decisions (D1...).
   `if` chains so `break` in an arm can't hit a `switch`; values are `cl_list`s with a tag in
   item 0. One-line unpack forms, `match` expressions, `?` and literal patterns wait for trial data.
 
+- 2026-11-07 (night 3, step 4): **built D24 part (a): enums and `match`.** `enum Name` / variant
+  lines / `end enum Name` (the struct parser, generalized); `match x` / `case` arms / `end match`;
+  keywords `enum`, `match`, `case`. Checker: global variant names, D4 construction (reuses
+  `construct`), bare `Look` as a value, exhaustiveness with the missing `case` lines as the fix,
+  `unreachable-case` (duplicate or after `case _`), `unknown-variant`, bindings (positional for one
+  field, by field name otherwise, `field: name` to rename, `unnamed-bind` for `case Move(a, b)`),
+  `returns()`/`breaks()` see through arms, `else`/stray `case`/`Command.Look` habits. Runtime: an
+  enum is a `cl_list` with the tag in item 0, descriptor `E<n>` into `cl_enums`; `==`, `print`,
+  failing-example output all work. Recursive enums work (`Expr`). New tests `ok/enums.cl`,
+  `err/enums.cl`; 24 tests. SPEC has an "Enums and match" section (~1.8k words now, ~2.4k tokens).
+
 ## Next step
-1. **Build D24 in three bites:** (a) `enum` declarations, variant construction, `==`/`print`,
-   and `match` with exhaustiveness, bindings and `returns()` support, plus tests; (b) `Option` /
+1. **Finish D24:** (b) `Option` /
    `Result` (types, `want`-typed `None`/`Ok`/`Err`, the "Option used as T" diagnostic and the
    habit fixes), SPEC section, tests; (c) rerun `--set big` and compare sentinels and unpack cost.
 2. Maybe `join` / `contains` built-ins. Then a wrong-but-compiles trial, holes (D9), the

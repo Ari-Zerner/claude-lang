@@ -96,8 +96,9 @@ class Diags:
 # ------------------------------------------------------------------ lexer
 
 KEYWORDS = {"fn", "end", "if", "else", "while", "for", "break", "continue", "return", "let", "var", "example",
-            "uses", "true", "false", "and", "or", "not", "struct"}
-BLOCK_KINDS = ("fn", "if", "while", "for", "struct")
+            "uses", "true", "false", "and", "or", "not", "struct", "enum", "match", "case"}
+BLOCK_KINDS = ("fn", "if", "while", "for", "struct", "enum", "match")
+NAMED_BLOCKS = ("fn", "struct", "enum")
 RANGE_FIX = "`a until b` stops before b, `a through b` includes it: `for i in 0 until n`"
 TWO_CHAR_OPS = ("->", "==", "!=", "<=", ">=")
 ONE_CHAR_OPS = "+-*/%<>=(),:[]"
@@ -377,11 +378,11 @@ def escape_text(t):
 
 
 def opener(kind, name):
-    return f"{kind} {name}" if kind in ("fn", "struct") else kind
+    return f"{kind} {name}" if kind in NAMED_BLOCKS else kind
 
 
 def closer(kind, name):
-    return f"end {kind} {name}" if kind in ("fn", "struct") else f"end {kind}"
+    return f"end {kind} {name}" if kind in NAMED_BLOCKS else f"end {kind}"
 
 
 def bin_node(op_tok, left, right):
@@ -408,7 +409,7 @@ NO_RETURN_TYPES = ("Unit", "Void", "void", "None", "Nothing")
 FN_WORDS = ("def", "func", "function", "fun", "proc")
 STRUCT_WORDS = ("class", "record", "data", "type", "typedef", "dataclass", "object")
 CLOSER_WORDS = {"endif": "if", "fi": "if", "endwhile": "while", "done": "while", "endfn": "fn", "endfor": "for",
-                "endstruct": "struct"}
+                "endstruct": "struct", "endenum": "enum", "endmatch": "match"}
 STMT_HINTS = {"elif": "write `else if`", "elsif": "write `else if`", "elseif": "write `else if`",
               "const": "write `let` (or `var` for a variable that changes)",
               "loop": "write `while true`"}
@@ -431,7 +432,8 @@ class Parser:
         self.stack = []  # open blocks: [kind, line, name]
         # Struct names, so a type can name a struct declared further down.
         self.struct_names = {toks[j + 1].text for j in range(len(toks) - 1)
-                             if toks[j].kind == "kw" and toks[j].text == "struct" and toks[j + 1].kind == "name"}
+                             if toks[j].kind == "kw" and toks[j].text in ("struct", "enum")
+                             and toks[j + 1].kind == "name"}
 
     # -- token helpers
     def peek(self, k=0):
@@ -504,8 +506,8 @@ class Parser:
             if t.kind == "kw" and t.text == "fn":
                 fns.append(self.fn_decl())
                 continue
-            if t.kind == "kw" and t.text == "struct":
-                structs.append(self.struct_decl())
+            if t.kind == "kw" and t.text in ("struct", "enum"):
+                structs.append(self.struct_decl(kind=t.text))
                 continue
             if t.kind == "name" and t.text in STRUCT_WORDS and self.at("name", k=1):
                 n = self.peek(1).text
@@ -525,7 +527,7 @@ class Parser:
                              t.line, t.col, len(t.text), "write `fn`")
                 fns.append(self.fn_decl())
                 continue
-            self.d.error("top-level", f"only `fn` and `struct` declarations can appear at the top level, found "
+            self.d.error("top-level", f"only `fn`, `struct` and `enum` declarations can appear at the top level, found "
                          f"{describe(t)}",
                          t.line, t.col, len(t.text))
             self.skip_line()
@@ -574,43 +576,47 @@ class Parser:
             return "Unit" if ret else None
         known = list(TYPES) + sorted(self.struct_names)
         hint = TYPE_HINTS.get(t.text) or next(iter(difflib.get_close_matches(t.text, known, 1)), None)
-        structs = f" and this file's structs ({', '.join(sorted(self.struct_names))})" if self.struct_names else ""
+        structs = (f" and this file's structs and enums ({', '.join(sorted(self.struct_names))})"
+                   if self.struct_names else "")
         sep = "," if self.struct_names else " and"
         self.d.error("unknown-type", f"unknown type `{t.text}`; the types are Int, Bool, String{sep} List[...]{structs}",
                      t.line, t.col,
                      len(t.text), f"write `{hint}`" if hint else None)
         return hint  # recover with the likely meaning, so one wrong name doesn't cascade
 
-    def struct_decl(self, habit=False):
-        """`struct Name`, one `field: Type` per line, `end struct Name` (D22). habit: the keyword was
-        `class`, `record`... (already reported), so the rest of the line is skipped quietly."""
+    def struct_decl(self, habit=False, kind="struct"):
+        """`struct Name`, one `field: Type` per line, `end struct Name` (D22); or `enum Name`, one variant per
+        line, `end enum Name` (D24). habit: the keyword was `class`, `record`... (already reported), so the
+        rest of the line is skipped quietly."""
         kw = self.next()
         name, name_tok, fields = "?", kw, []
         try:
-            name_tok = self.expect_name("for the struct")
+            name_tok = self.expect_name(f"for the {kind}")
             name = name_tok.text
             if habit:
                 self.skip_line()
             elif self.at_op(":") or self.at_op("("):
                 t = self.peek()
-                self.d.error("syntax", "the fields go on the lines below, one per line", t.line, t.col, len(t.text),
-                             f"`struct {name}`, then `field: Type` lines, then `end struct {name}`")
+                what = "fields" if kind == "struct" else "variants"
+                item = "`field: Type`" if kind == "struct" else "variant"
+                self.d.error("syntax", f"the {what} go on the lines below, one per line", t.line, t.col, len(t.text),
+                             f"`{kind} {name}`, then {item} lines, then `end {kind} {name}`")
                 self.skip_line()
             else:
                 self.end_line()
         except ParseError:
             self.skip_line()
-        self.stack.append(["struct", kw.line, name])
+        self.stack.append([kind, kw.line, name])
         end_tok = None
         while True:
             while self.at("nl"):
                 self.next()
             t = self.peek()
             new_decl = t.kind == "name" and t.text in STRUCT_WORDS + FN_WORDS and self.at("name", k=1)
-            if t.kind == "eof" or (t.kind == "kw" and t.text in ("fn", "struct")) or new_decl:
+            if t.kind == "eof" or (t.kind == "kw" and t.text in NAMED_BLOCKS) or new_decl:
                 more = "" if t.kind == "eof" else f" before the next `{t.text}`"
-                self.d.error("unclosed-block", f"`struct {name}` (line {kw.line}) is never closed{more}",
-                             t.line, t.col, max(1, len(t.text)), self.closer_fix("struct", name, kw.line, t.line))
+                self.d.error("unclosed-block", f"`{kind} {name}` (line {kw.line}) is never closed{more}",
+                             t.line, t.col, max(1, len(t.text)), self.closer_fix(kind, name, kw.line, t.line))
                 break
             if t.kind == "kw" and t.text == "end":
                 if self.closer_line() == "mine":
@@ -618,22 +624,47 @@ class Parser:
                     break
                 continue
             if t.kind == "rbrace":
-                self.rbrace("struct", name)
+                self.rbrace(kind, name)
                 end_tok = t
                 break
             if t.kind == "name" and t.text in CLOSER_WORDS and self.at("nl", k=1):
-                self.d.error("closer-kind", f"`{t.text}` isn't a keyword; write `end struct {name}`",
-                             t.line, t.col, len(t.text), f"`end struct {name}`")
+                self.d.error("closer-kind", f"`{t.text}` isn't a keyword; write `end {kind} {name}`",
+                             t.line, t.col, len(t.text), f"`end {kind} {name}`")
                 self.skip_line()
                 break
             try:
-                f = self.field_decl(name)
+                f = self.field_decl(name) if kind == "struct" else self.variant_decl(name)
                 if f:
                     fields.append(f)
             except ParseError:
                 self.skip_line()
         self.stack.pop()
+        if kind == "enum":
+            return Node("enum", kw, name=name, name_tok=name_tok, variants=fields, end_tok=end_tok)
         return Node("struct", kw, name=name, name_tok=name_tok, fields=fields, end_tok=end_tok)
+
+    def variant_decl(self, ename):
+        """`Name` or `Name(field: Type, ...)`, one variant per line (D24). Returns (name, fields, tok)."""
+        t = self.expect_name(f"for a variant of `enum {ename}`")
+        fields = []
+        if self.at_op("("):
+            p = self.next()
+            if self.at_op(")"):
+                c = self.next()
+                self.d.error("syntax", "a variant with no fields is written without `()`", p.line, p.col, 2,
+                             f"`{t.text}`")
+            else:
+                while True:
+                    ft = self.expect_name(f"for a field of `{t.text}`, e.g. `{t.text}(value: Int)`")
+                    self.expect_op(":", f"after `{ft.text}`: each field is `name: Type`")
+                    fields.append((ft.text, self.parse_type(), ft))
+                    if self.at_op(","):
+                        self.next()
+                        continue
+                    self.expect_op(")", f"to close `{t.text}(...`")
+                    break
+        self.end_line()
+        return (t.text, fields, t)
 
     def field_decl(self, sname):
         t = self.peek()
@@ -737,7 +768,18 @@ class Parser:
                 if how == "outer":
                     return stmts, "implicit", t
                 continue
+            if t.kind == "kw" and t.text == "case":
+                if kind == "match":
+                    return stmts, "case", t
+                self.d.error("stray-case", f"`case` belongs to a `match`, but the innermost open block is "
+                             f"`{opener(kind, name)}` (line {line})", t.line, t.col, 4)
+                self.skip_line()
+                continue
             if t.kind == "kw" and t.text == "else":
+                if kind == "match":
+                    self.d.error("syntax", "a `match` has no `else`; the arm that catches everything else is "
+                                 "`case _`", t.line, t.col, 4, "`case _`")
+                    return stmts, "case", t
                 if kind == "if":
                     return stmts, "else", t
                 self.d.error("stray-else", f"`else` belongs to an `if`, but the innermost open block is "
@@ -797,7 +839,7 @@ class Parser:
     def resolve_closer(self, k, start_tok, start):
         kind, line, name = self.stack[-1]
         if k == kind:
-            if kind in ("fn", "struct"):
+            if kind in NAMED_BLOCKS:
                 if self.at("name"):
                     nt = self.next()
                     if nt.text != name:
@@ -838,6 +880,8 @@ class Parser:
                 return self.while_stmt()
             if w == "for":
                 return self.for_stmt()
+            if w == "match":
+                return self.match_stmt()
             if w in ("break", "continue"):
                 self.next()
                 self.end_line()
@@ -932,6 +976,63 @@ class Parser:
         body, _, _ = self.block_body()
         self.stack.pop()
         return Node("while", kw, cond=cond, body=body)
+
+    def match_stmt(self):
+        """match <expr>, then `case <pattern>` arms, then `end match` (D24)."""
+        kw = self.next()
+        subj = self.cond_line()
+        self.stack.append(["match", kw.line, None])
+        arms = []
+        body, how, _ = self.block_body()
+        if body:
+            b = body[0].tok
+            self.d.error("syntax", "a `match` holds only `case` arms; every statement goes inside one", b.line, b.col,
+                         1, "start the first arm with `case <variant>` above this line")
+        while how == "case":
+            ct = self.next()
+            pat = None
+            if ct.text == "else":
+                pat = Node("pat", ct, variant="_", binds=[], paren=False)
+                self.end_line()
+            else:
+                try:
+                    pat = self.pattern()
+                except ParseError:
+                    self.skip_line()
+            body, how, _ = self.block_body()
+            arms.append((pat, body, ct))
+        self.stack.pop()
+        return Node("match", kw, subj=subj, arms=arms)
+
+    def pattern(self):
+        """`_`, `Variant`, `Variant(name)`, `Variant(field, field)`, `Variant(field: name, ...)` (D24)."""
+        t = self.expect_name("after `case`: a variant, like `case Some(x)`, or `_`")
+        if self.at_op(".") and self.at("name", k=1):
+            self.next()
+            v = self.next()
+            self.d.error("syntax", "variants are written without their enum's name", t.line, t.col,
+                         len(t.text) + 1 + len(v.text), f"`case {v.text}`")
+            t = v
+        n = Node("pat", t, variant=t.text, binds=[], paren=False)
+        if self.at_op("("):
+            n.paren = True
+            self.next()
+            while not self.at_op(")"):
+                b = self.expect_name("to bind, like `case Some(x)`")
+                if self.at_op(":"):
+                    self.next()
+                    nb = self.expect_name(f"after `{b.text}:`, the name to bind it to")
+                    n.binds.append((b.text, nb.text, nb))
+                else:
+                    n.binds.append((None, b.text, b))
+                if self.at_op(","):
+                    self.next()
+                elif not self.at_op(")"):
+                    self.fail("syntax", f"expected `,` or `)` in the pattern, found {describe(self.peek())}",
+                              self.peek())
+            self.next()
+        self.end_line()
+        return n
 
     def for_stmt(self):
         """for x in xs / for i in a until b / for i in a through b, each optionally ending in `reversed` (D21)."""
@@ -1193,6 +1294,8 @@ def returns(stmts):
         if (s.kind == "while" and s.cond is not None and s.cond.kind == "bool" and s.cond.value
                 and not breaks(s.body)):
             return True  # `while true` with no `break` never falls through
+        if s.kind == "match" and s.arms and all(returns(b) for _, b, _ in s.arms):
+            return True  # a match covers every case (or it's an error), so this holds
     return False
 
 
@@ -1202,6 +1305,8 @@ def breaks(stmts):
         if s.kind == "break":
             return True
         if s.kind == "if" and (any(breaks(b) for _, b in s.branches) or breaks(s.else_body or [])):
+            return True
+        if s.kind == "match" and any(breaks(b) for _, b, _ in s.arms):
             return True
     return False
 
@@ -1216,7 +1321,9 @@ class Checker:
     def __init__(self, fns, structs, d):
         self.d, self.fns, self.all = d, {}, fns
         self.in_example = False
-        self.structs = {}
+        self.structs, self.enums, self.variants = {}, {}, {}
+        enums = [st for st in structs if st.kind == "enum"]
+        structs = [st for st in structs if st.kind != "enum"]
         for st in structs:
             if st.name == "?":
                 continue
@@ -1236,6 +1343,7 @@ class Checker:
                 self.err("empty-struct", f"`struct {st.name}` has no fields", st.name_tok,
                          "add one `name: Type` line per field")
         self.check_struct_cycles()
+        self.declare_enums(enums)
         for f in fns:
             if f.name == "?":
                 continue
@@ -1244,11 +1352,44 @@ class Checker:
             elif f.name in self.structs:
                 self.err("duplicate-fn", f"`{f.name}` is already the name of the struct on line "
                          f"{self.structs[f.name].tok.line}, and calling it makes one", f.name_tok)
+            elif f.name in self.variants:
+                self.err("duplicate-fn", f"`{f.name}` is already a variant of `enum {self.variants[f.name][0]}`",
+                         f.name_tok)
             elif f.name in self.fns:
                 self.err("duplicate-fn", f"`fn {f.name}` is already defined on line {self.fns[f.name].tok.line}",
                          f.name_tok)
             else:
                 self.fns[f.name] = f
+
+    def declare_enums(self, enums):
+        """enum Name / variants / end enum Name (D24). Variant names are global, like functions."""
+        for en in enums:
+            if en.name == "?":
+                continue
+            if en.name in TYPES or en.name in LIST_WORDS or en.name in BUILTINS:
+                self.err("reserved-name", f"`{en.name}` is built in and can't be redefined", en.name_tok)
+                continue
+            if en.name in self.structs or en.name in self.enums:
+                other = self.structs.get(en.name) or self.enums.get(en.name)
+                self.err("duplicate-struct", f"`{en.name}` is already defined on line {other.tok.line}", en.name_tok)
+                continue
+            self.enums[en.name] = en
+            if not en.variants:
+                self.err("empty-enum", f"`enum {en.name}` has no variants", en.name_tok,
+                         "add one variant per line, like `Done` or `Moved(x: Int)`")
+            for idx, (vname, fields, vtok) in enumerate(en.variants):
+                if vname in self.variants:
+                    self.err("duplicate-name", f"`{vname}` is already a variant of `enum {self.variants[vname][0]}`; "
+                             "variant names are used without their enum's name, so each must be unique", vtok)
+                elif vname in self.structs or vname in self.enums or vname in BUILTINS or vname in TYPES:
+                    self.err("duplicate-name", f"`{vname}` is already the name of a type or built-in", vtok)
+                else:
+                    self.variants[vname] = (en.name, idx, fields)
+                seen = {}
+                for fname, _, ftok in fields:
+                    if fname in seen:
+                        self.err("duplicate-name", f"field `{fname}` is already declared on line {seen[fname]}", ftok)
+                    seen.setdefault(fname, ftok.line)
 
     def check_struct_cycles(self):
         """A struct can't contain itself except through a list: there's no null, so it could never be made."""
@@ -1406,6 +1547,8 @@ class Checker:
             self.loops -= 1
         elif k == "for":
             self.for_stmt(s)
+        elif k == "match":
+            self.match_stmt(s)
         elif k in ("break", "continue"):
             if not self.loops:
                 self.err("outside-loop", f"`{k}` only works inside a `while` or `for` loop", s.tok)
@@ -1489,6 +1632,94 @@ class Checker:
         self.block(s.body)
         self.loops -= 1
         self.scopes.pop()
+
+    def match_stmt(self, s):
+        """match x / case Variant(bindings) ... / end match: exhaustive, no fall-through (D24)."""
+        t = self.expr(s.subj)
+        en = self.enums.get(t)
+        if t and en is None:
+            self.err_at("not-an-enum", f"`match` needs an enum value, but `{render(s.subj)}` is {t}", s.subj,
+                        "use `if` / `else if` to compare it" if t in TYPES else None)
+        s.enum = t if en else None
+        seen, wild = {}, None
+        for pat, body, ct in s.arms:
+            self.scopes.append({})
+            if pat is not None:
+                pat.slots = []
+                if wild is not None:
+                    self.err("unreachable-case", f"this `case` comes after `case _` (line {wild.tok.line}), so it can "
+                             "never run", pat.tok, "move `case _` to the end")
+                if pat.variant == "_":
+                    if pat.paren:
+                        self.err("syntax", "`case _` matches anything and binds nothing", pat.tok, "`case _`")
+                    wild = wild or pat
+                elif en is not None:
+                    info = self.variants.get(pat.variant)
+                    names = [v[0] for v in en.variants]
+                    if info is None or info[0] != t:
+                        sg = difflib.get_close_matches(pat.variant, names, 1)
+                        where = f" (it's a variant of `enum {info[0]}`)" if info else ""
+                        self.err("unknown-variant", f"`enum {t}` has no variant `{pat.variant}`{where}; its variants "
+                                 f"are {', '.join(names)}", pat.tok, f"did you mean `case {sg[0]}`?" if sg else None)
+                    elif pat.variant in seen:
+                        self.err("unreachable-case", f"`case {pat.variant}` already appears on line {seen[pat.variant]}",
+                                 pat.tok, "merge the two arms")
+                    else:
+                        seen[pat.variant] = pat.tok.line
+                        pat.tag = info[1]
+                        self.bind_pattern(pat, info[2])
+            self.block(body)
+            self.scopes.pop()
+        if en is not None and wild is None:
+            missing = [v for v in en.variants if v[0] not in seen]
+            if missing:
+                lines = ", ".join(f"`case {v}" + (f"({', '.join(f[0] for f in fs)})`" if fs else "`")
+                                  for v, fs, _ in missing)
+                self.err("non-exhaustive", f"this `match` doesn't handle {', '.join(v[0] for v in missing)}; every "
+                         f"variant of `enum {t}` needs a `case` (or end with `case _`)", s.tok, f"add {lines}")
+
+    def bind_pattern(self, pat, fields):
+        v, fnames = pat.variant, [f[0] for f in fields]
+        if not fields:
+            if pat.paren:
+                self.err("syntax", f"`{v}` has no fields, so its case is written `case {v}`", pat.tok, f"`case {v}`")
+            return
+        targets = []
+        if len(fields) == 1 and len(pat.binds) == 1 and pat.binds[0][0] is None:
+            targets.append((0, pat.binds[0][1], pat.binds[0][2]))
+        elif (len(pat.binds) == len(fields) and all(f is None for f, _, _ in pat.binds)
+              and not any(n in fnames for _, n, _ in pat.binds)):
+            # case Move(a, b): positional, which could silently swap fields; say which is which
+            fixed = ", ".join(f"{fn}: {n}" for fn, (_, n, _) in zip(fnames, pat.binds))
+            self.err("unnamed-bind", f"`{v}` has more than one field, so a pattern binds them by name, not position",
+                     pat.binds[0][2], f"`case {v}({fixed})`")
+            targets = [(k, n, t) for k, (_, n, t) in enumerate(pat.binds)]
+        else:
+            used = set()
+            for fld, name, tok in pat.binds:
+                key = fld or name
+                if key not in fnames:
+                    sg = difflib.get_close_matches(key, fnames, 1)
+                    fix = (f"`{sg[0]}: {key}` binds the field `{sg[0]}` to the name `{key}`" if sg and fld is None
+                           else f"did you mean `{sg[0]}`?" if sg else None)
+                    self.err("no-field", f"`{v}` has no field `{key}` (it has {', '.join(fnames)}); in a pattern, a "
+                             "bare name binds the field with that name", tok, fix)
+                    continue
+                if key in used:
+                    self.err("duplicate-name", f"the field `{key}` is bound twice", tok)
+                    continue
+                used.add(key)
+                targets.append((fnames.index(key), name, tok))
+        for k, name, tok in targets:
+            if name == "_":
+                continue
+            prev = self.lookup(name)
+            if prev:
+                self.err("duplicate-name", f"`{name}` is already defined on line {prev.line}; a name means one thing "
+                         "within a function", tok, f"bind it to another name: `{fnames[k]}: other_name`")
+                continue
+            self.scopes[-1][name] = Var(fields[k][1], False, tok.line)
+            pat.slots.append((k, name, fields[k][1]))
 
     def set_path(self, s):
         """xs[i] = v, p.x = v, and any deeper path: ps[i].score = v, grid[i][j] = v, a.b.c = v (D23).
@@ -1605,6 +1836,14 @@ class Checker:
             v = self.lookup(e.name)
             if v:
                 return v.ty
+            if e.name in self.variants:
+                en, idx, fields = self.variants[e.name]
+                if fields:
+                    self.err("arg-count", f"`{e.name}` has fields, so making one gives each a value", e.tok,
+                             f"`{e.name}(" + ", ".join(f"{f[0]}: ..." for f in fields) + ")`")
+                    return en
+                e.variant = (en, idx)
+                return en
             self.unknown_name(e.tok)
             return None
         if k == "neg":
@@ -1672,13 +1911,13 @@ class Checker:
             return self.call(e, want)
         return None
 
-    def match_args(self, name, pnames, e, what="parameter"):
+    def match_args(self, name, pnames, e, what="parameter", decl=None):
         """Check argument names against the parameters (D4). Returns order, where order[i] is the index of the
         parameter args[i] fills, or None if the count is wrong (already reported)."""
         args = e.args
         names = [n for n, _, _ in args]
         want = f"`{name}({', '.join(p + ': ...' for p in pnames)})`"
-        decl = f"`fn {name}`" if what == "parameter" else f"`struct {name}`"
+        decl = decl or (f"`fn {name}`" if what == "parameter" else f"`struct {name}`")
         if len(args) != len(pnames):
             if what == "field":
                 given = {n for n, _, _ in args}
@@ -1752,12 +1991,26 @@ class Checker:
         if name in ("append", "repeat"):
             return self.list_builtin(e, want)
         if name in self.structs:
-            return self.construct(e)
+            e.ctor = True
+            return self.construct(e, self.structs[name].fields)
+        if name in self.variants:
+            en, idx, fields = self.variants[name]
+            e.variant = (en, idx)
+            if not fields:
+                self.err("arg-count", f"`{name}` has no fields, so it's written without `()`", e.tok, f"`{name}`")
+                for _, _, a in e.args:
+                    self.expr(a)
+                e.order = []
+                e.args = []
+                return en
+            self.construct(e, fields, decl=f"`{name}`")
+            return en
         f = self.fns.get(name)
         if f is None:
             for _, _, a in e.args:
                 self.expr(a)
-            sugg = difflib.get_close_matches(name, list(self.fns) + list(BUILTINS) + list(self.structs), 1)
+            sugg = difflib.get_close_matches(name, list(self.fns) + list(BUILTINS) + list(self.structs)
+                                             + list(self.variants), 1)
             fix = CALL_HINTS.get(name) or (f"did you mean `{sugg[0]}`?" if sugg else None)
             self.err("unknown-fn", f"there's no function `{name}`", e.tok, fix)
             return None
@@ -1777,16 +2030,15 @@ class Checker:
                 self.err_at("type-mismatch", f"`{name}`'s `{pn}` is {pt}, but `{render(a)}` is {t}", a)
         return f.ret
 
-    def construct(self, e):
-        """Point(x: 1, y: 2): every field, named, in the declared order, like any call (D4)."""
-        st = self.structs[e.name]
-        order = self.match_args(e.name, [f[0] for f in st.fields], e, what="field")
-        e.ctor = True
+    def construct(self, e, fields, decl=None):
+        """Point(x: 1, y: 2) or Moved(x: 1, y: 2): every field, named, in the declared order, like any
+        call (D4)."""
+        order = self.match_args(e.name, [f[0] for f in fields], e, what="field", decl=decl)
         for i, (_, _, a) in enumerate(e.args):
             if order is None:
                 self.expr(a)
                 continue
-            fn, ft, _ = st.fields[order[i]]
+            fn, ft, _ = fields[order[i]]
             t = self.expr(a, want=ft)
             if t == "Unit":
                 self.err_at("unit-value", f"`{render(a)}` returns nothing, so it can't be a field", a)
@@ -1843,11 +2095,12 @@ SLOT = {"Int": "i", "Bool": "b", "String": "s"}
 
 
 STRUCT_IDS = {}  # struct name -> index in the runtime's cl_recs table; set by Emitter
+ENUM_IDS = {}  # enum name -> index in the runtime's cl_enums table (D24); set by Emitter
 
 
 def is_ref(t):
     """Lists and structs: a cl_list * with copy-on-write (D19, D22)."""
-    return bool(t) and (is_list(t) or t in STRUCT_IDS)
+    return bool(t) and (is_list(t) or t in STRUCT_IDS or t in ENUM_IDS)
 
 
 def ctype(t):
@@ -1865,6 +2118,8 @@ def desc(t):
         return "L" + desc(elem(t))
     if t in STRUCT_IDS:
         return f"R{STRUCT_IDS[t]}"
+    if t in ENUM_IDS:
+        return f"E{ENUM_IDS[t]}"
     return t[0]
 
 RUNTIME = r"""#include <stdarg.h>
@@ -1930,7 +2185,11 @@ struct cl_list { int64_t rc, len, cap; cl_val *items; };
    Descriptors: I, B, S, L + item descriptor, R + index into cl_recs. */
 typedef struct { const char *name; int n; const char *const *fields; const char *const *descs; } cl_rec_info;
 @RECS@
-#define CL_REF(d) ((d)[0] == 'L' || (d)[0] == 'R')
+/* An enum value (D24) is a cl_list too: item 0 is the variant's index, items 1.. its fields. */
+typedef struct { const char *name; int nv; const cl_rec_info *vs; } cl_enum_info;
+@ENUMS@
+#define CL_REF(d) ((d)[0] == 'L' || (d)[0] == 'R' || (d)[0] == 'E')
+static const cl_enum_info *cl_enum(const char *d) { return &cl_enums[atoi(d + 1)]; }
 static const cl_rec_info *cl_rec(const char *d) { return &cl_recs[atoi(d + 1)]; }
 static cl_list *cl_list_new(int64_t cap, int line, int col) {
     if (cap < 4) cap = 4;
@@ -2008,6 +2267,12 @@ static bool cl_val_eq(cl_val a, cl_val b, const char *d) {
         const cl_rec_info *r = cl_rec(d);
         for (int k = 0; k < r->n; k++) if (!cl_val_eq(a.l->items[k], b.l->items[k], r->descs[k])) return false;
         return true; }
+    case 'E': {
+        if (a.l == b.l) return true;
+        if (a.l->items[0].i != b.l->items[0].i) return false;
+        const cl_rec_info *r = &cl_enum(d)->vs[a.l->items[0].i];
+        for (int k = 0; k < r->n; k++) if (!cl_val_eq(a.l->items[k + 1], b.l->items[k + 1], r->descs[k])) return false;
+        return true; }
     default: return cl_list_eq(a.l, b.l, d + 1); } }
 static bool cl_list_eq(cl_list *a, cl_list *b, const char *d) {
     if (a == b) return true;
@@ -2041,6 +2306,17 @@ static void cl_show_into(cl_buf *b, cl_val v, const char *d) {
             cl_put(b, r->fields[k], strlen(r->fields[k])); cl_put(b, ": ", 2);
             cl_show_into(b, v.l->items[k], r->descs[k]); }
         cl_put(b, ")", 1); break; }
+    case 'E': {  /* Moved(x: 1, y: 2), or a bare Done */
+        const cl_rec_info *r = &cl_enum(d)->vs[v.l->items[0].i];
+        cl_put(b, r->name, strlen(r->name));
+        if (r->n) {
+            cl_put(b, "(", 1);
+            for (int k = 0; k < r->n; k++) {
+                if (k) cl_put(b, ", ", 2);
+                cl_put(b, r->fields[k], strlen(r->fields[k])); cl_put(b, ": ", 2);
+                cl_show_into(b, v.l->items[k + 1], r->descs[k]); }
+            cl_put(b, ")", 1); }
+        break; }
     default:
         cl_put(b, "[", 1);
         for (int64_t i = 0; i < v.l->len; i++) {
@@ -2077,9 +2353,12 @@ ARITH_FN = {"+": "cl_add", "-": "cl_sub", "*": "cl_mul", "/": "cl_div", "%": "cl
 class Emitter:
     def __init__(self, fns, structs, path):
         self.fns, self.path = fns, path
-        self.structs = [st for st in structs if st.name != "?"]
+        self.structs = [st for st in structs if st.name != "?" and st.kind == "struct"]
+        self.enums = [st for st in structs if st.name != "?" and st.kind == "enum"]
         STRUCT_IDS.clear()
         STRUCT_IDS.update({st.name: i for i, st in enumerate(self.structs)})
+        ENUM_IDS.clear()
+        ENUM_IDS.update({en.name: i for i, en in enumerate(self.enums)})
         self.examples = [s for f in fns for s in f.body if s.kind == "example"]
 
     def recs(self):
@@ -2094,8 +2373,28 @@ class Emitter:
         out.append("static const cl_rec_info cl_recs[] = {" + (", ".join(rows) or "{0}") + "};")
         return "\n".join(out)
 
+    def enum_table(self):
+        """The cl_enums table: each enum's name and, per variant, its name, field names and descriptors."""
+        out, rows = [], []
+        for i, en in enumerate(self.enums):
+            vs = []
+            for j, (vname, fields, _) in enumerate(en.variants):
+                if fields:
+                    out.append(f"static const char *const cl_ef{i}_{j}[] = {{"
+                               + ", ".join(c_string(f[0]) for f in fields) + "};")
+                    out.append(f"static const char *const cl_ed{i}_{j}[] = {{"
+                               + ", ".join(c_string(desc(f[1])) for f in fields) + "};")
+                    vs.append(f"{{{c_string(vname)}, {len(fields)}, cl_ef{i}_{j}, cl_ed{i}_{j}}}")
+                else:
+                    vs.append(f"{{{c_string(vname)}, 0, NULL, NULL}}")
+            out.append(f"static const cl_rec_info cl_ev{i}[] = {{" + ", ".join(vs) + "};")
+            rows.append(f"{{{c_string(en.name)}, {len(en.variants)}, cl_ev{i}}}")
+        out.append("static const cl_enum_info cl_enums[] = {" + (", ".join(rows) or "{0}") + "};")
+        return "\n".join(out)
+
     def emit(self):
-        out = [RUNTIME.replace("@FILE@", json.dumps(self.path)).replace("@RECS@", self.recs())]
+        out = [RUNTIME.replace("@FILE@", json.dumps(self.path)).replace("@RECS@", self.recs())
+               .replace("@ENUMS@", self.enum_table())]
         for f in self.fns:
             out.append(self.proto(f) + ";")
         self.tmp = 0
@@ -2176,6 +2475,22 @@ class Emitter:
                 if s.else_body is not None:
                     out.append(f"{ind}}} else {{")
                     self.block(s.else_body, depth + 1, out)
+                out.append(f"{ind}}}")
+            elif k == "match":
+                # An `if` chain, never `switch`, so a `break` in an arm reaches the enclosing loop (D24).
+                self.tmp += 1
+                m = f"cl_m{self.tmp}"
+                out.append(f"{ind}{{ cl_list *{m} = {self.expr(s.subj)};")
+                arms = [(pat, body) for pat, body, _ in s.arms if pat is not None]
+                for j, (pat, body) in enumerate(arms):
+                    cond = "1" if pat.variant == "_" else f"{m}->items[0].i == {pat.tag}"
+                    out.append(f"{ind}{'if' if j == 0 else '} else if'} ({cond}) {{")
+                    for fk, name, ty in pat.slots:
+                        out.append(f"{ind}    {ctype(ty)} v_{name} = {m}->items[{fk + 1}].{slot(ty)};")
+                        self.params.add(name)  # borrowed from the matched value, like a parameter
+                    self.block(body, depth + 1, out)
+                if arms:
+                    out.append(f"{ind}}}")
                 out.append(f"{ind}}}")
             elif k == "while":
                 out.append(f"{ind}while ({self.expr(s.cond)}) {{")
@@ -2307,6 +2622,8 @@ class Emitter:
                 return pieces[0]
             return f"cl_concat({len(pieces)}, " + ", ".join(pieces) + ")"
         if k == "name":
+            if getattr(e, "variant", None):
+                return f"cl_list_of(1, (cl_val){{.i = INT64_C({e.variant[1]})}})"
             return f"v_{e.name}"
         if k == "neg":
             return f"cl_neg({self.expr(e.expr)}, {e.tok.line}, {e.tok.col})"
@@ -2318,7 +2635,7 @@ class Emitter:
                 return f"{ARITH_FN[e.op]}({l}, {r}, {e.tok.line}, {e.tok.col})"
             if e.op in ("==", "!=") and e.left.ty == "String":
                 return f"(strcmp({l}, {r}) {e.op} 0)"
-            if e.op in ("==", "!=") and e.left.ty in STRUCT_IDS:
+            if e.op in ("==", "!=") and (e.left.ty in STRUCT_IDS or e.left.ty in ENUM_IDS):
                 return (f"({'' if e.op == '==' else '!'}cl_val_eq((cl_val){{.l = {l}}}, (cl_val){{.l = {r}}}, "
                         f"{c_string(desc(e.left.ty))}))")
             if e.op in ("==", "!=") and is_list(e.left.ty):
@@ -2342,6 +2659,12 @@ class Emitter:
                     return f"cl_list_appended({self.expr(by['list'])}, {self.val(by['item'], own=True)}, {d})"
                 return (f"cl_list_repeat({self.val(by['item'], own=True)}, {self.expr(by['times'])}, {d}, "
                         f"{e.tok.line}, {e.tok.col})")
+            if getattr(e, "variant", None):  # Moved(x: 1, y: 2): the tag, then the fields in declared order
+                vals = [None] * len(e.args)
+                for i, (_, _, a) in enumerate(e.args):
+                    vals[e.order[i]] = self.val(a, own=True)
+                return (f"cl_list_of({len(vals) + 1}, (cl_val){{.i = INT64_C({e.variant[1]})}}"
+                        + "".join(", " + v for v in vals) + ")")
             if getattr(e, "ctor", False):  # Point(x: 1, y: 2): fields in declared order
                 vals = [None] * len(e.args)
                 for i, (_, _, a) in enumerate(e.args):

@@ -1,0 +1,16 @@
+go north
+something else
+move 2,-1
+look
+go east
+Move(dx: 2, dy: -1)
+[Go(dir: "north"), Take(item: "key"), Move(dx: 2, dy: -1), Look, Go(dir: "east")]
+true
+true
+false
+false
+2 1 5 Go(dir: "east")
+Add(left: Num(value: 10), right: Mul(left: Num(value: 3), right: Add(left: Num(value: 1), right: Num(value: 1))))
+16
+3
+Go(dir: "north") Look

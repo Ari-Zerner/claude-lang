@@ -28,8 +28,8 @@ end fn main
 - **One statement per line.** No `;`, no line continuation. Indentation is not significant
   (use two spaces per level by convention).
 - **Blocks have no braces and no `:`.** A block starts with its keyword line and ends with a
-  closer that names it: `end if`, `end while`, `end for`, `end fn <name>` and
-  `end struct <name>` (repeating the name).
+  closer that names it: `end if`, `end while`, `end for`, `end match`, and `end fn <name>`,
+  `end struct <name>`, `end enum <name>` (repeating the name).
 
 ## Types
 
@@ -40,8 +40,9 @@ end fn main
 | `String` | text in double quotes, e.g. `"Hello, {name}!"` |
 | `List[T]` | a list of `T`s, e.g. `[1, 2, 3]` is `List[Int]`; `List[List[String]]` nests |
 | a struct | a type you declare, with named fields (see Structs) |
+| an enum | a type you declare, one of several variants (see Enums) |
 
-There are no other types yet: no floats, maps, enums, null. Nothing converts implicitly
+There are no other types yet: no floats, maps, null. Nothing converts implicitly
 (an `Int` is never used as a `Bool`).
 
 ## Strings
@@ -110,6 +111,39 @@ end struct Point
 - Structs are values, like lists: `var q = p` copies, and a function can't change one it's given.
 - `==` compares every field; `print` and `{p}` show `Point(x: 1, y: 2)`.
 - There are no methods: write a function that takes the struct, `fn area(r: Rect) -> Int`.
+
+## Enums and match
+
+```
+enum Shape
+  Circle(radius: Int)
+  Rect(w: Int, h: Int)
+  Empty
+end enum Shape
+
+fn area(s: Shape) -> Int
+  example area(Rect(w: 2, h: 3)) == 6
+  match s
+    case Circle(r)
+      return 3 * r * r
+    case Rect(w, h)
+      return w * h
+    case Empty
+      return 0
+  end match
+end fn area
+```
+
+- A variant has fields like a struct, or none. Make one like a call, by the naming rule for
+  calls: `Circle(2)` or `Circle(radius: 2)`, `Rect(w: 2, h: 3)`, and plain `Empty`. Variant
+  names are used alone (`Empty`, never `Shape.Empty`), so each must be unique.
+- `match` runs the one `case` that fits; there's no fall-through and no `break` needed (a
+  `break` inside one leaves the enclosing loop). Every variant needs a `case`, or end with
+  `case _` to catch the rest.
+- Bindings: one field binds positionally (`case Circle(r)`); with more, each name must be a
+  field's name (`case Rect(w, h)`, any order), or rename with `case Rect(w: width, h: height)`.
+  `case Rect` alone ignores the fields. Bound names can't be assigned.
+- Enums are values like structs; `==` compares them, and `print` shows `Rect(w: 2, h: 3)`.
 
 ## Functions
 
