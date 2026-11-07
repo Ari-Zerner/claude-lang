@@ -203,7 +203,8 @@ design and its decisions (D1...).
    DESIGN.md open questions): contracts (`requires`/`ensures`), build-time counterexample search,
    then proofs. Lean 4 core is the likely backend: Ari OK'd it, it's installed at
    `/root/.local/share/lean/lean-4.35.0-linux/bin/lean` (CACHEDIR.TAG keeps it out of the off-site
-   backup; re-downloadable), and it fits the box (~55 MB anonymous, 3 s per small file; DESIGN.md).
+   backup; re-downloadable; `lean`/`lake` on PATH via /root/bin symlinks, and this project owns the
+   install, so other sessions ask here before upgrading or removing it), and it fits the box (~55 MB anonymous, 3 s per small file; DESIGN.md).
    `trials/lean/` has the measurement files and `probe.sh` (peak anon/file RSS).
    Ari's sanity check (2026-11-07): "is this buying Claude anything over just writing in Lean
    directly?" and "I expect models to get things right in Python as well. Does that undermine
