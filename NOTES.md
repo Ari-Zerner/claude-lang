@@ -199,9 +199,13 @@ design and its decisions (D1...).
 1. **Finish D24 (c):** rerun `--set big` (both models) and compare with
    `2026-11-07-1102`/`-1104`: how many sentinels remain, whether find functions return
    `Option`, how many lines each unpack costs, and any new mistakes.
-2. Maybe `join` / `contains` built-ins. Then a wrong-but-compiles trial, holes (D9), the
+2. **Formal verification** (Ari, 2026-11-07: "we definitely want proofs, not just fuzzing"; see
+   DESIGN.md open questions): contracts (`requires`/`ensures`), build-time counterexample search,
+   then proofs. Choose the backend first (Lean 4 core vs Z3; Lean's memory still to be measured,
+   pending Ari's OK to run it). Pairs with the wrong-but-compiles trial.
+3. Maybe `join` / `contains` built-ins. Then a wrong-but-compiles trial, holes (D9), the
    formatter (D12). `parse_int(s) -> Result[Int, String]` is now possible (Result exists).
-3. Small cleanups seen in part (b): the `if let` cascade (bound name undefined) and the extra
+4. Small cleanups seen in part (b): the `if let` cascade (bound name undefined) and the extra
    `not-bool` after `if i is None`.
 
 Known gaps: no list concatenation; no string iteration or indexing; nothing is freed; the `.cl`

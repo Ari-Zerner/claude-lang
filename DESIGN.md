@@ -263,18 +263,32 @@ Claude differs from a human programmer in ways that matter for language design:
 - Mutation: immutable by default with `var` for mutable locals? Leaning yes.
 - Modules/imports: explicit, file = module, no wildcards. Details later.
 - Effects in signatures (D-to-be): e.g. `fn main() uses io`. Valuable for point 6, cost unknown.
-- **Contracts and formal verification** (Ari asked 2026-11-07: "does it fit?"). Likely a good
-  fit: the annotations that make verification tedious for people (pre/postconditions, loop
-  invariants) are cheap for Claude (point 3), and value semantics, no global state and effects in
-  signatures remove the aliasing and heap reasoning that make verifiers hard. It targets point 5
-  directly, and a counterexample is a point-4 diagnostic. Staged idea, each step useful alone:
+- **Contracts and formal verification** (Ari asked 2026-11-07: "does it fit?"; then: "we
+  definitely want proofs, not just fuzzing"). Likely a good fit: the annotations that make
+  verification tedious for people (pre/postconditions, loop invariants) are cheap for Claude
+  (point 3), and value semantics, no global state and effects in signatures remove the aliasing
+  and heap reasoning that make verifiers hard. It targets point 5 directly. Plan:
   (a) `requires` / `ensures` lines beside `example`, checked at runtime; (b) at build time, run
   each function on many small inputs that satisfy `requires` and report the first that breaks
-  `ensures` (no solver); (c) proofs with Z3 (apt `z3` 4.8.12, small; Dafny needs .NET and Lean is
-  far too big for this box) for Int/Bool/length facts, with `invariant` lines on loops, which would
-  also prove D16's traps can't fire. Caveat: verification moves trust from the body to the spec,
-  and a misread task gets a matching wrong `ensures`; the gain is a two-line contract to check
-  instead of a long body. Test (a)+(b) with the wrong-but-compiles trial before building (c).
+  `ensures`, which is the concrete counterexample a point-4 diagnostic needs; (c) **proofs, the
+  goal**, with `invariant` lines on loops; they would also prove D16's traps can't fire. (b) is a
+  stepping stone and the counterexample finder, not a substitute for (c).
+  Backend for (c), *open*:
+  - *Lean 4 core* (no Mathlib). v4.35.0 is a 594 MB download, 3.0 GB unpacked (fine on disk), and
+    ships `grind` (SMT-style), `omega` (linear integer arithmetic) and `bv_decide` (bit-vectors
+    via the bundled CaDiCaL, i.e. 64-bit overflow). Proofs are checked by Lean's kernel, so they
+    mean something even if our translation's automation is buggy; the trusted part shrinks to the
+    translation itself. Claude knows Lean far better than any proof syntax we'd invent. Memory not
+    yet measured: running the downloaded binary needs Ari's OK (auto mode blocked it). Mathlib is
+    what's too heavy (~5 GB of oleans and GBs of RAM to import).
+  - *Z3* (apt `z3` 4.8.12, small): our own verification-condition generator, Dafny-style.
+    Automatic and gives counterexamples, but the generator is trusted and nonlinear facts
+    (`result * result <= n`) are weak.
+  Either way Claude writes contracts and invariants in claude-lang, the compiler generates the
+  proof obligations and tries automation, and a failure names the unproved line in claude-lang
+  terms. Caveat: verification moves trust from the body to the spec, and a misread task gets a
+  matching wrong `ensures`; the gain is a two-line contract to check instead of a long body. The
+  wrong-but-compiles trial measures that.
 
   ```
   fn isqrt(n: Int) -> Int
