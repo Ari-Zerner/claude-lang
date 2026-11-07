@@ -263,6 +263,26 @@ Claude differs from a human programmer in ways that matter for language design:
 - Mutation: immutable by default with `var` for mutable locals? Leaning yes.
 - Modules/imports: explicit, file = module, no wildcards. Details later.
 - Effects in signatures (D-to-be): e.g. `fn main() uses io`. Valuable for point 6, cost unknown.
+- **Contracts and formal verification** (Ari asked 2026-11-07: "does it fit?"). Likely a good
+  fit: the annotations that make verification tedious for people (pre/postconditions, loop
+  invariants) are cheap for Claude (point 3), and value semantics, no global state and effects in
+  signatures remove the aliasing and heap reasoning that make verifiers hard. It targets point 5
+  directly, and a counterexample is a point-4 diagnostic. Staged idea, each step useful alone:
+  (a) `requires` / `ensures` lines beside `example`, checked at runtime; (b) at build time, run
+  each function on many small inputs that satisfy `requires` and report the first that breaks
+  `ensures` (no solver); (c) proofs with Z3 (apt `z3` 4.8.12, small; Dafny needs .NET and Lean is
+  far too big for this box) for Int/Bool/length facts, with `invariant` lines on loops, which would
+  also prove D16's traps can't fire. Caveat: verification moves trust from the body to the spec,
+  and a misread task gets a matching wrong `ensures`; the gain is a two-line contract to check
+  instead of a long body. Test (a)+(b) with the wrong-but-compiles trial before building (c).
+
+  ```
+  fn isqrt(n: Int) -> Int
+    requires n >= 0
+    ensures result * result <= n
+    ensures (result + 1) * (result + 1) > n
+    example isqrt(n: 10) == 3
+  ```
 
 ## Sketch of what code might look like (not final)
 
