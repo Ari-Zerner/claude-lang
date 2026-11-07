@@ -181,10 +181,20 @@ design and its decisions (D1...).
   failing-example output all work. Recursive enums work (`Expr`). New tests `ok/enums.cl`,
   `err/enums.cl`; 24 tests. SPEC has an "Enums and match" section (~1.8k words now, ~2.4k tokens).
 
+- 2026-11-07 (night 3, step 5): **built D24 part (b): `Option[T]` and `Result[T, E]`.** Types parse
+  (with fixes for `Optional`, `Maybe`, `Either`, `<...>`); `Some`/`Ok`/`Err` and bare `None` are typed
+  from `want` (`needs-type` without it); `match` over them via `variants_of()`, which now drives
+  enums too. `wrap_fix()` adds the fix to every type-mismatch site: Option-as-T gets the `match`
+  lines, T-as-Option gets `Some(...)` (`return Some(i)` at a return). Habit errors for `null`,
+  `if let`, `.unwrap()`, `?`, `=>`, `switch` (recovers as `match`), `default:`, `is None`.
+  New tests `ok/options.cl` (find, a digit parser returning Result, a running max in an Option,
+  lists of Options, `Some(None)`), `err/options.cl`; 26 tests. SPEC ~1.95k words (~2.6k tokens).
+  Known cascade: an `if let` line leaves its body's bound name undefined.
+
 ## Next step
-1. **Finish D24:** (b) `Option` /
-   `Result` (types, `want`-typed `None`/`Ok`/`Err`, the "Option used as T" diagnostic and the
-   habit fixes), SPEC section, tests; (c) rerun `--set big` and compare sentinels and unpack cost.
+1. **Finish D24 (c):** rerun `--set big` (both models) and compare with
+   `2026-11-07-1102`/`-1104`: how many sentinels remain, whether find functions return
+   `Option`, how many lines each unpack costs, and any new mistakes.
 2. Maybe `join` / `contains` built-ins. Then a wrong-but-compiles trial, holes (D9), the
    formatter (D12). Parsing (`parse_int(s) -> Result`) needs D7's Result; enums/`match` with it.
 

@@ -1,0 +1,13 @@
+bread at 1 costs 5
+no fig
+Ok(3)
+Err("no fig")
+error: not a digit: x
+Some(8)
+true
+false
+[Some(1), None, Some(3)]
+4
+Some(None)
+Ok([1, 2])
+Some(10) None

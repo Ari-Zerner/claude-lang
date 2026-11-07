@@ -169,8 +169,7 @@ Claude differs from a human programmer in ways that matter for language design:
   through `big[0].tags` run in well under a second). The next likely habit, `for p in ps` then
   `p.score = ...`, is an error that says `p` is a copy and gives the index loop.
 
-- **D24. Enums with payloads, `Option[T]` and `Result[T, E]`, and `match`.** (2026-11-07; enums
-  and `match` built, `Option`/`Result` next.) The big trial's clearest signal: every one of 8 programs had a find
+- **D24. Enums with payloads, `Option[T]` and `Result[T, E]`, and `match`.** (2026-11-07; built.) The big trial's clearest signal: every one of 8 programs had a find
   function returning `-1` or `""` for "not found". That's C's idiom, and it's exactly the
   confident-but-wrong territory of point 5: nothing makes the caller check. D7 promised `Result`
   and exhaustive `match`; this is the concrete form.
@@ -244,7 +243,12 @@ Claude differs from a human programmer in ways that matter for language design:
     built bottom-up and never changed in place, so no cycle can form. `case Move(a, b)` (positional
     names that aren't fields) is `unnamed-bind` with the renaming fix `case Move(dx: a, dy: b)`.
     A bound name returned from a function is shared, not moved, since it's borrowed from the
-    matched value.
+    matched value. `Option`/`Result` tags: `Some`/`Ok` 0, `None`/`Err` 1, value in item 1;
+    descriptors `O`+T and `Q`+T+E (`cl_desc_skip` finds E). Habit fixes built: `return i` ->
+    `return Some(i)` (and `Ok`/`Err` for a Result), `xs[i]`/`i + 1` with an Option -> the
+    `match` lines, `x == 2` -> `Some(2)`, `null`/`nil`/`undefined`, `Optional[T]`/`Option<T>`,
+    `if let`, `.unwrap()` and friends, `?`, `=>`, `switch`/`when` (parsed as `match`), `default:`,
+    `is None`. `None` with no known type is `needs-type`, like `[]`.
   - *Not decided, waiting for trial data:* a one-line unpack (`if let`-style, a `guard`, a
     `value_or(option:, default:)`), `match` as an expression, `?` for `Result` (D7: it's concise
     but hides control flow), and literal patterns (`case "go"`, `case 0`) for Int and String.

@@ -41,6 +41,8 @@ end fn main
 | `List[T]` | a list of `T`s, e.g. `[1, 2, 3]` is `List[Int]`; `List[List[String]]` nests |
 | a struct | a type you declare, with named fields (see Structs) |
 | an enum | a type you declare, one of several variants (see Enums) |
+| `Option[T]` | `Some(x)` or `None`: a `T` that may be missing |
+| `Result[T, E]` | `Ok(x)` or `Err(e)`: a `T`, or an error of type `E` |
 
 There are no other types yet: no floats, maps, null. Nothing converts implicitly
 (an `Int` is never used as a `Bool`).
@@ -144,6 +146,27 @@ end fn area
   field's name (`case Rect(w, h)`, any order), or rename with `case Rect(w: width, h: height)`.
   `case Rect` alone ignores the fields. Bound names can't be assigned.
 - Enums are values like structs; `==` compares them, and `print` shows `Rect(w: 2, h: 3)`.
+
+**`Option` and `Result` are built-in enums.** There's no null: a function that may find nothing
+returns `Option[T]`, and one that may fail returns `Result[T, E]`.
+
+```
+fn find(xs: List[String], x: String) -> Option[Int]
+  example find(xs: ["a", "b"], x: "b") == Some(1)
+  example find(xs: [], x: "a") == None
+  for i in 0 until length(xs)
+    if xs[i] == x
+      return Some(i)
+    end if
+  end for
+  return None
+end fn find
+```
+
+- Write `return Some(i)`, not `return i`. `None`, `Ok(x)` and `Err(e)` need their type known
+  from where they're used (a `return`, an argument, a field, `var best: Option[Int] = None`).
+- An `Option[Int]` is not an `Int`: unpack it with `match`, with `case Some(i)` and
+  `case None` (`case Ok(v)` and `case Err(e)` for a `Result`). `x == None` is a valid test.
 
 ## Functions
 

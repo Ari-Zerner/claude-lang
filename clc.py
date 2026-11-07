@@ -114,7 +114,12 @@ CHAR_HINTS = {
          "`length(xs)` or `xs = append(list: xs, item: x)` (and there are no floats)",
     "'": "strings use double quotes: `\"...\"`",
     "@": "there are no decorators or annotations",
+    "?": "there's no `?`: a value that may be missing is `Option[T]` (`Some(x)` or `None`), and `match` "
+         "unpacks it",
+    "=>": "there's no `=>`: a `case` line holds only the pattern, and the arm's statements go on the lines below",
 }
+OPTION_METHODS = ("unwrap", "expect", "unwrap_or", "unwrap_or_else", "is_some", "is_none", "is_ok", "is_err",
+                  "get", "value", "or_else", "map", "ok", "err")
 STRING_ESCAPES = {"n": "\n", "t": "\t", "\\": "\\", '"': '"', "{": "{", "}": "}"}
 
 
@@ -195,6 +200,8 @@ def lex_dot(line, i, n, lineno, d, toks):
         fix = f"`{obj} = append(list: {obj}, item: {args})`"
     elif obj and m in ("len", "length", "size", "count") and not args:
         fix = f"`length({obj})`"
+    elif obj and m in OPTION_METHODS:
+        fix = f"unpack it with `match {obj}`, then `case Some(x)` and `case None` (or `Ok(x)` / `Err(e)`)"
     elif obj:
         fix = f"call a function with `{obj}` as an argument instead"
     d.error("method-call", f"`.{m}(...)` doesn't exist: there are no methods", lineno, i + 1, end - i, fix)
@@ -243,6 +250,9 @@ def lex_span(line, i, n, lineno, d, toks, in_interp=False):
             w = line[i:j]
             toks.append(Tok("kw" if w in KEYWORDS else "name", w, lineno, col))
             i = j
+        elif line[i:i + 2] == "=>":
+            d.error("bad-char", f"`=>` isn't an operator here; {CHAR_HINTS['=>']}", lineno, col, 2)
+            i += 2
         elif line[i:i + 2] in TWO_CHAR_OPS:
             toks.append(Tok("op", line[i:i + 2], lineno, col))
             i += 2
@@ -401,6 +411,8 @@ def fold(operands, ops):
 # ------------------------------------------------------------------ parser
 
 TYPES = ("Int", "Bool", "String")
+OPTION_WORDS = ("Option", "Optional", "Maybe", "option", "optional")
+RESULT_WORDS = ("Result", "Either", "result")
 LIST_WORDS = ("List", "list", "Vec", "vec", "Vector", "vector", "Array", "array", "Seq", "Sequence", "Slice")
 TYPE_HINTS = {"int": "Int", "i64": "Int", "i32": "Int", "Integer": "Int", "integer": "Int", "long": "Int",
               "bool": "Bool", "boolean": "Bool", "Boolean": "Bool",
@@ -413,7 +425,8 @@ CLOSER_WORDS = {"endif": "if", "fi": "if", "endwhile": "while", "done": "while",
 STMT_HINTS = {"elif": "write `else if`", "elsif": "write `else if`", "elseif": "write `else if`",
               "const": "write `let` (or `var` for a variable that changes)",
               "loop": "write `while true`"}
-LINE_END_HINTS = {"then": "no `then`: the block starts on the next line",
+LINE_END_HINTS = {"is": "there's no `is`: compare with `==` (`x == None`), or unpack an Option with `match`",
+                  "then": "no `then`: the block starts on the next line",
                   "do": "no `do`: the block starts on the next line",
                   ":": "no `:` after the condition: the block starts on the next line"}
 
@@ -537,6 +550,8 @@ class Parser:
         if t.kind != "name":
             self.fail("syntax", f"expected a type (Int, Bool, String, List[...] or a struct), found {describe(t)}", t)
         self.next()
+        if (t.text in OPTION_WORDS or t.text in RESULT_WORDS) and (self.at_op("[") or self.at_op("<")):
+            return self.generic_type(t)
         if t.text in LIST_WORDS or (t.text not in TYPES and t.text not in self.struct_names
                                     and (self.at_op("[") or self.at_op("<"))):
             return self.list_type(t)
@@ -547,6 +562,26 @@ class Parser:
             self.d.error("unknown-type", "list types are written `List[...]`", b.line, b.col, 2, f"`List[{ty}]`")
             return f"List[{ty}]"
         return ty
+
+    def generic_type(self, t):
+        """`Option[T]`, `Result[T, E]` (D24), after the name; recovers from `Optional[T]`, `Option<T>`, `Either`."""
+        base, n = ("Option", 1) if t.text in OPTION_WORDS else ("Result", 2)
+        b = self.next()
+        close = ">" if b.text == "<" else "]"
+        args = [self.parse_type()]
+        while self.at_op(","):
+            self.next()
+            args.append(self.parse_type())
+        self.expect_op(close, f"to close `{t.text}{b.text}...`")
+        shown = f"{base}[{', '.join(a or '...' for a in args)}]"
+        if len(args) != n:
+            want = "Option[T]: one type" if base == "Option" else "Result[T, E]: the value's type and the error's"
+            self.d.error("unknown-type", f"`{base}` takes {n} type(s), as in {want}", t.line, t.col, len(t.text))
+            return None
+        if t.text != base or close == ">":
+            self.d.error("unknown-type", f"this type is written `{base}[...]`", t.line, t.col, len(t.text),
+                         f"`{shown}`")
+        return shown if all(args) else None
 
     def list_type(self, t):
         """`List[T]`, after the name; also recovers from `list[T]`, `Vec<T>`, `Array[T]`..."""
@@ -775,6 +810,10 @@ class Parser:
                              f"`{opener(kind, name)}` (line {line})", t.line, t.col, 4)
                 self.skip_line()
                 continue
+            if kind == "match" and t.kind == "name" and t.text == "default":
+                self.d.error("syntax", "`default` isn't a keyword; the arm that catches everything else is `case _`",
+                             t.line, t.col, 7, "`case _`")
+                return stmts, "case", t
             if t.kind == "kw" and t.text == "else":
                 if kind == "match":
                     self.d.error("syntax", "a `match` has no `else`; the arm that catches everything else is "
@@ -900,6 +939,11 @@ class Parser:
                 self.fail("syntax", f"`{t.text}` isn't a keyword; {STMT_HINTS[t.text]}", t, fix)
             if t.text in FN_WORDS:
                 self.fail("syntax", "functions can't be nested", t)
+            if t.text in ("switch", "when", "select") and not self.at_op("=", 1) and not self.at_op("(", 1) \
+                    and not self.at("nl", k=1):
+                self.d.error("syntax", f"`{t.text}` isn't a keyword; write `match`", t.line, t.col, len(t.text),
+                             "`match <value>`, then `case` lines, then `end match`")
+                return self.match_stmt()
             if self.at_op("=", 1):
                 self.next()
                 self.next()
@@ -946,7 +990,14 @@ class Parser:
 
     def if_stmt(self):
         kw = self.next()
-        cond = self.cond_line()
+        if self.at_kw("let") or self.at_kw("var"):
+            lt = self.peek()
+            self.d.error("syntax", "there's no `if let`; unpack an Option or Result with `match`", lt.line, lt.col,
+                         len(lt.text), "`match <value>`, then `case Some(x)` and `case None`, then `end match`")
+            self.skip_line()
+            cond = None
+        else:
+            cond = self.cond_line()
         self.stack.append(["if", kw.line, None])
         branches, else_body = [], None
         body, how, _ = self.block_body()
@@ -991,9 +1042,9 @@ class Parser:
         while how == "case":
             ct = self.next()
             pat = None
-            if ct.text == "else":
+            if ct.text in ("else", "default"):
                 pat = Node("pat", ct, variant="_", binds=[], paren=False)
-                self.end_line()
+                self.skip_line()
             else:
                 try:
                     pat = self.pattern()
@@ -1270,11 +1321,36 @@ def is_list(t):
     return bool(t) and t.startswith("List[")
 
 
+def is_option(t):
+    return bool(t) and t.startswith("Option[")
+
+
+def is_result(t):
+    return bool(t) and t.startswith("Result[")
+
+
+def type_args(t):
+    """"Result[List[Int], String]" -> ["List[Int]", "String"]."""
+    parts, depth, cur = [], 0, ""
+    for ch in t[t.index("[") + 1:-1]:
+        depth += {"[": 1, "]": -1}.get(ch, 0)
+        if ch == "," and depth == 0:
+            parts.append(cur.strip())
+            cur = ""
+        else:
+            cur += ch
+    return parts + [cur.strip()]
+
+
+BUILTIN_VARIANTS = ("Some", "None", "Ok", "Err")
+
+
 def elem(t):
     return t[5:-1] if is_list(t) else None
+_NO_NULL = "there's no null; a value that may be missing is `Option[T]`, made with `Some(x)` or `None`"
 NAME_HINTS = {"True": "write `true`", "False": "write `false`", "TRUE": "write `true`",
-              "FALSE": "write `false`", "null": "there's no null", "nil": "there's no null",
-              "None": "there's no null"}
+              "FALSE": "write `false`", "null": _NO_NULL, "nil": _NO_NULL, "NULL": _NO_NULL,
+              "undefined": _NO_NULL, "Nothing": _NO_NULL, "Null": _NO_NULL}
 
 
 class Var:
@@ -1327,7 +1403,8 @@ class Checker:
         for st in structs:
             if st.name == "?":
                 continue
-            if st.name in TYPES or st.name in LIST_WORDS or st.name in BUILTINS:
+            if (st.name in TYPES or st.name in LIST_WORDS or st.name in BUILTINS or st.name in BUILTIN_VARIANTS
+                    or st.name in ("Option", "Result")):
                 self.err("reserved-name", f"`{st.name}` is built in and can't be redefined", st.name_tok)
             elif st.name in self.structs:
                 self.err("duplicate-struct", f"`struct {st.name}` is already defined on line "
@@ -1347,7 +1424,7 @@ class Checker:
         for f in fns:
             if f.name == "?":
                 continue
-            if f.name in BUILTINS:
+            if f.name in BUILTINS or f.name in BUILTIN_VARIANTS:
                 self.err("reserved-name", f"`{f.name}` is built in and can't be redefined", f.name_tok)
             elif f.name in self.structs:
                 self.err("duplicate-fn", f"`{f.name}` is already the name of the struct on line "
@@ -1366,7 +1443,8 @@ class Checker:
         for en in enums:
             if en.name == "?":
                 continue
-            if en.name in TYPES or en.name in LIST_WORDS or en.name in BUILTINS:
+            if (en.name in TYPES or en.name in LIST_WORDS or en.name in BUILTINS or en.name in BUILTIN_VARIANTS
+                    or en.name in ("Option", "Result")):
                 self.err("reserved-name", f"`{en.name}` is built in and can't be redefined", en.name_tok)
                 continue
             if en.name in self.structs or en.name in self.enums:
@@ -1381,6 +1459,8 @@ class Checker:
                 if vname in self.variants:
                     self.err("duplicate-name", f"`{vname}` is already a variant of `enum {self.variants[vname][0]}`; "
                              "variant names are used without their enum's name, so each must be unique", vtok)
+                elif vname in BUILTIN_VARIANTS:
+                    self.err("reserved-name", f"`{vname}` is built in (it's part of `Option` or `Result`)", vtok)
                 elif vname in self.structs or vname in self.enums or vname in BUILTINS or vname in TYPES:
                     self.err("duplicate-name", f"`{vname}` is already the name of a type or built-in", vtok)
                 else:
@@ -1497,7 +1577,8 @@ class Checker:
                 self.err_at("unit-value", f"`{render(s.expr)}` returns nothing, so there's no value to store",
                             s.expr)
             elif s.has_ann and s.ann and t and t != s.ann:
-                self.err_at("type-mismatch", f"`{s.name}` is declared {s.ann}, but the value is {t}", s.expr)
+                self.err_at("type-mismatch", f"`{s.name}` is declared {s.ann}, but the value is {t}", s.expr,
+                            self.wrap_fix(s.expr, t, s.ann))
             ty = s.ann if s.has_ann else t
             s.var_ty = ty
             if s.name == "_":
@@ -1518,7 +1599,8 @@ class Checker:
             if v is None:
                 self.unknown_name(s.tok, fix=f"declare it first: `var {s.name} = ...`")
             elif self.check_mutable(s.name, v, s.tok) and v.ty and t and v.ty != t:
-                self.err_at("type-mismatch", f"`{s.name}` is {v.ty}, but the value is {t}", s.expr)
+                self.err_at("type-mismatch", f"`{s.name}` is {v.ty}, but the value is {t}", s.expr,
+                            self.wrap_fix(s.expr, t, v.ty))
         elif k in ("setindex", "setfield"):
             self.set_path(s)
         elif k == "return":
@@ -1533,7 +1615,10 @@ class Checker:
                     self.err("unexpected-return-value", f"`fn {self.cur.name}` has no return type, so `return` "
                              "takes no value", s.tok, f"add `-> {t}` to the signature, or write plain `return`")
                 elif ret and t and t != ret:
-                    self.err_at("type-mismatch", f"`fn {self.cur.name}` returns {ret}, but this is {t}", s.expr)
+                    fix = self.wrap_fix(s.expr, t, ret)
+                    if fix and (is_option(ret) or is_result(ret)):
+                        fix = "`return " + fix[1:]
+                    self.err_at("type-mismatch", f"`fn {self.cur.name}` returns {ret}, but this is {t}", s.expr, fix)
         elif k == "if":
             for c, body in s.branches:
                 self.cond(c)
@@ -1636,11 +1721,11 @@ class Checker:
     def match_stmt(self, s):
         """match x / case Variant(bindings) ... / end match: exhaustive, no fall-through (D24)."""
         t = self.expr(s.subj)
-        en = self.enums.get(t)
-        if t and en is None:
-            self.err_at("not-an-enum", f"`match` needs an enum value, but `{render(s.subj)}` is {t}", s.subj,
-                        "use `if` / `else if` to compare it" if t in TYPES else None)
-        s.enum = t if en else None
+        vs = self.variants_of(t)
+        if t and vs is None:
+            self.err_at("not-an-enum", f"`match` needs an enum, Option or Result, but `{render(s.subj)}` is {t}",
+                        s.subj, "use `if` / `else if` to compare it" if t in TYPES else None)
+        what = f"enum {t}" if t in self.enums else t
         seen, wild = {}, None
         for pat, body, ct in s.arms:
             self.scopes.append({})
@@ -1653,30 +1738,108 @@ class Checker:
                     if pat.paren:
                         self.err("syntax", "`case _` matches anything and binds nothing", pat.tok, "`case _`")
                     wild = wild or pat
-                elif en is not None:
-                    info = self.variants.get(pat.variant)
-                    names = [v[0] for v in en.variants]
-                    if info is None or info[0] != t:
+                elif vs is not None:
+                    names = [v[0] for v in vs]
+                    if pat.variant not in names:
+                        info = self.variants.get(pat.variant)
                         sg = difflib.get_close_matches(pat.variant, names, 1)
-                        where = f" (it's a variant of `enum {info[0]}`)" if info else ""
-                        self.err("unknown-variant", f"`enum {t}` has no variant `{pat.variant}`{where}; its variants "
+                        where = (f" (it's a variant of `enum {info[0]}`)" if info else
+                                 " (it's part of Option)" if pat.variant in ("Some", "None") else
+                                 " (it's part of Result)" if pat.variant in ("Ok", "Err") else "")
+                        self.err("unknown-variant", f"`{what}` has no variant `{pat.variant}`{where}; its variants "
                                  f"are {', '.join(names)}", pat.tok, f"did you mean `case {sg[0]}`?" if sg else None)
                     elif pat.variant in seen:
                         self.err("unreachable-case", f"`case {pat.variant}` already appears on line {seen[pat.variant]}",
                                  pat.tok, "merge the two arms")
                     else:
                         seen[pat.variant] = pat.tok.line
-                        pat.tag = info[1]
-                        self.bind_pattern(pat, info[2])
+                        pat.tag = names.index(pat.variant)
+                        self.bind_pattern(pat, vs[pat.tag][1])
             self.block(body)
             self.scopes.pop()
-        if en is not None and wild is None:
-            missing = [v for v in en.variants if v[0] not in seen]
+        if vs is not None and wild is None:
+            missing = [v for v in vs if v[0] not in seen]
             if missing:
                 lines = ", ".join(f"`case {v}" + (f"({', '.join(f[0] for f in fs)})`" if fs else "`")
-                                  for v, fs, _ in missing)
+                                  for v, fs in missing)
                 self.err("non-exhaustive", f"this `match` doesn't handle {', '.join(v[0] for v in missing)}; every "
-                         f"variant of `enum {t}` needs a `case` (or end with `case _`)", s.tok, f"add {lines}")
+                         f"variant of `{what}` needs a `case` (or end with `case _`)", s.tok, f"add {lines}")
+
+    def variants_of(self, t):
+        """[(variant, fields)] for a type `match` can take apart (in tag order), else None."""
+        if t in self.enums:
+            return [(v, fs) for v, fs, _ in self.enums[t].variants]
+        if is_option(t):
+            return [("Some", [("value", type_args(t)[0], None)]), ("None", [])]
+        if is_result(t):
+            a = type_args(t)
+            return [("Ok", [("value", a[0], None)]), ("Err", [("error", a[1], None)])]
+        return None
+
+    def wrap_fix(self, e, t, want):
+        """A fix for a type mismatch between T and Option[T] / Result[T, E], either way round."""
+        if not t or not want or e is None:
+            return None
+        r = render(e)
+        if is_option(t) and type_args(t)[0] == want:
+            return (f"`{r}` may be missing, so unpack it first: `match {r}`, then `case Some(x)` (use `x` there) "
+                    "and `case None`, then `end match`")
+        if is_result(t) and type_args(t)[0] == want:
+            return (f"`{r}` may be an error, so unpack it first: `match {r}`, then `case Ok(x)` (use `x` there) "
+                    "and `case Err(e)`, then `end match`")
+        if is_option(want) and type_args(want)[0] == t:
+            return f"`Some({r})`"
+        if is_result(want):
+            a, b = type_args(want)
+            if t == a:
+                return f"`Ok({r})`"
+            if t == b:
+                return f"`Err({r})`"
+        return None
+
+    def builtin_variant(self, e, want):
+        """Some(x), Ok(x), Err(e) (D24); `None` is in _expr."""
+        name = e.name
+        fname = "error" if name == "Err" else "value"
+        if len(e.args) != 1:
+            for _, _, a in e.args:
+                self.expr(a)
+            self.err("arg-count", f"`{name}` holds exactly one value, but this passes {len(e.args)}", e.tok,
+                     f"`{name}(...)`")
+            return None
+        n, ntok, a = e.args[0]
+        if n is not None and n != fname:
+            self.err("unknown-arg-name", f"`{name}`'s field is `{fname}`, not `{n}`", ntok, f"`{name}({render(a)})`")
+        e.order = [0]
+        if name == "Some":
+            inner = type_args(want)[0] if is_option(want) else None
+            t = self.expr(a, want=inner)
+            e.variant = ("Option", 0)
+            if t == "Unit":
+                self.err_at("unit-value", f"`{render(a)}` returns nothing, so there's nothing to hold", a)
+                return None
+            if inner and t and t != inner:
+                self.err_at("type-mismatch", f"this is {want}, so `Some` holds {inner}, but `{render(a)}` is {t}", a,
+                            self.wrap_fix(a, t, inner))
+                return want
+            return want if is_option(want) else (f"Option[{t}]" if t else None)
+        e.variant = ("Result", 0 if name == "Ok" else 1)
+        if not is_result(want):
+            t = self.expr(a)
+            if want:
+                self.err_at("type-mismatch", f"`{name}(...)` is a Result, but this needs {want}", e,
+                            f"if it can fail, make the type `Result[{want}, ...]`")
+            else:
+                self.err_at("needs-type", f"`{name}(...)` needs its full Result type known here", e,
+                            "use it where the type is known: a `return` from a function returning `Result[T, E]`, "
+                            "an argument, or `let r: Result[Int, String] = ...`")
+            return None
+        exp = type_args(want)[0 if name == "Ok" else 1]
+        t = self.expr(a, want=exp)
+        if t and t != exp:
+            self.err_at("type-mismatch", f"this is {want}, so `{name}` holds {exp}, but `{render(a)}` is {t}", a,
+                        self.wrap_fix(a, t, exp))
+        return want
 
     def bind_pattern(self, pat, fields):
         v, fnames = pat.variant, [f[0] for f in fields]
@@ -1758,9 +1921,10 @@ class Checker:
             b = tgt.base
             if tgt.kind == "index" and b.ty:
                 self.err_at("type-mismatch", f"`{render(b)}` is {b.ty}, so its items are {tt}, but the value is {t}",
-                            s.expr)
+                            s.expr, self.wrap_fix(s.expr, t, tt))
             else:
-                self.err_at("type-mismatch", f"`{render(tgt)}` is {tt}, but the value is {t}", s.expr)
+                self.err_at("type-mismatch", f"`{render(tgt)}` is {tt}, but the value is {t}", s.expr,
+                            self.wrap_fix(s.expr, t, tt))
 
     def field_type(self, e, bt):
         """The type of field e.name of a value of type bt, or None (reported)."""
@@ -1812,7 +1976,8 @@ class Checker:
             elif is_list(t) and op == "*" and e.kind == "list" and len(e.items) == 1 and other is not None:
                 fix = f"`repeat(item: {render(e.items[0])}, times: {render(other)})`"
             what = "an index" if op == "[...]" else f"`{op}`"
-            self.err_at("type-mismatch", f"{what} needs {want}, but `{render(e)}` is {t}", e, fix)
+            self.err_at("type-mismatch", f"{what} needs {want}, but `{render(e)}` is {t}", e,
+                        fix or self.wrap_fix(e, t, want))
 
     def expr(self, e, want=None):
         e.ty = self._expr(e, want)
@@ -1836,6 +2001,17 @@ class Checker:
             v = self.lookup(e.name)
             if v:
                 return v.ty
+            if e.name == "None":
+                e.variant = ("Option", 1)
+                if is_option(want):
+                    return want
+                if want:
+                    self.err_at("type-mismatch", f"`None` is an empty Option, but this needs {want}", e,
+                                f"if it can be missing, make the type `Option[{want}]` and use `Some(x)` for a value")
+                else:
+                    self.err_at("needs-type", "`None` needs its type known here", e,
+                                "say which, e.g. `var best: Option[Int] = None`")
+                return None
             if e.name in self.variants:
                 en, idx, fields = self.variants[e.name]
                 if fields:
@@ -1900,7 +2076,8 @@ class Checker:
                 if "Unit" in (lt, rt):
                     self.err_at("unit-value", "a function that returns nothing can't be compared", e)
                 elif lt and rt and lt != rt:
-                    self.err_at("type-mismatch", f"can't compare {lt} with {rt}", e)
+                    self.err_at("type-mismatch", f"can't compare {lt} with {rt}", e,
+                                self.wrap_fix(e.right, rt, lt) or self.wrap_fix(e.left, lt, rt))
                 return "Bool"
             self.need(e.left, lt, "Bool", op)
             self.need(e.right, rt, "Bool", op)
@@ -1993,6 +2170,8 @@ class Checker:
         if name in self.structs:
             e.ctor = True
             return self.construct(e, self.structs[name].fields)
+        if name in ("Some", "Ok", "Err"):
+            return self.builtin_variant(e, want)
         if name in self.variants:
             en, idx, fields = self.variants[name]
             e.variant = (en, idx)
@@ -2027,7 +2206,8 @@ class Checker:
             if t == "Unit":
                 self.err_at("unit-value", f"`{render(a)}` returns nothing, so it can't be an argument", a)
             elif pt and t and pt != t:
-                self.err_at("type-mismatch", f"`{name}`'s `{pn}` is {pt}, but `{render(a)}` is {t}", a)
+                self.err_at("type-mismatch", f"`{name}`'s `{pn}` is {pt}, but `{render(a)}` is {t}", a,
+                            self.wrap_fix(a, t, pt))
         return f.ret
 
     def construct(self, e, fields, decl=None):
@@ -2043,7 +2223,8 @@ class Checker:
             if t == "Unit":
                 self.err_at("unit-value", f"`{render(a)}` returns nothing, so it can't be a field", a)
             elif ft and t and ft != t:
-                self.err_at("type-mismatch", f"`{e.name}`'s `{fn}` is {ft}, but `{render(a)}` is {t}", a)
+                self.err_at("type-mismatch", f"`{e.name}`'s `{fn}` is {ft}, but `{render(a)}` is {t}", a,
+                            self.wrap_fix(a, t, ft))
         e.order = order
         return e.name
 
@@ -2100,7 +2281,7 @@ ENUM_IDS = {}  # enum name -> index in the runtime's cl_enums table (D24); set b
 
 def is_ref(t):
     """Lists and structs: a cl_list * with copy-on-write (D19, D22)."""
-    return bool(t) and (is_list(t) or t in STRUCT_IDS or t in ENUM_IDS)
+    return bool(t) and (is_list(t) or is_option(t) or is_result(t) or t in STRUCT_IDS or t in ENUM_IDS)
 
 
 def ctype(t):
@@ -2120,6 +2301,11 @@ def desc(t):
         return f"R{STRUCT_IDS[t]}"
     if t in ENUM_IDS:
         return f"E{ENUM_IDS[t]}"
+    if is_option(t):
+        return "O" + desc(type_args(t)[0])
+    if is_result(t):
+        a, b = type_args(t)
+        return "Q" + desc(a) + desc(b)
     return t[0]
 
 RUNTIME = r"""#include <stdarg.h>
@@ -2188,7 +2374,14 @@ typedef struct { const char *name; int n; const char *const *fields; const char 
 /* An enum value (D24) is a cl_list too: item 0 is the variant's index, items 1.. its fields. */
 typedef struct { const char *name; int nv; const cl_rec_info *vs; } cl_enum_info;
 @ENUMS@
-#define CL_REF(d) ((d)[0] == 'L' || (d)[0] == 'R' || (d)[0] == 'E')
+#define CL_REF(d) ((d)[0] == 'L' || (d)[0] == 'R' || (d)[0] == 'E' || (d)[0] == 'O' || (d)[0] == 'Q')
+/* Option (O + T) and Result (Q + T + E) are tagged like enums: Some/Ok 0, None/Err 1, value in item 1. */
+static const char *cl_desc_skip(const char *d) {
+    switch (*d) {
+    case 'L': case 'O': return cl_desc_skip(d + 1);
+    case 'Q': return cl_desc_skip(cl_desc_skip(d + 1));
+    case 'R': case 'E': d++; while (*d >= '0' && *d <= '9') d++; return d;
+    default: return d + 1; } }
 static const cl_enum_info *cl_enum(const char *d) { return &cl_enums[atoi(d + 1)]; }
 static const cl_rec_info *cl_rec(const char *d) { return &cl_recs[atoi(d + 1)]; }
 static cl_list *cl_list_new(int64_t cap, int line, int col) {
@@ -2267,6 +2460,12 @@ static bool cl_val_eq(cl_val a, cl_val b, const char *d) {
         const cl_rec_info *r = cl_rec(d);
         for (int k = 0; k < r->n; k++) if (!cl_val_eq(a.l->items[k], b.l->items[k], r->descs[k])) return false;
         return true; }
+    case 'O': case 'Q': {
+        if (a.l == b.l) return true;
+        int64_t t = a.l->items[0].i;
+        if (t != b.l->items[0].i) return false;
+        if (d[0] == 'O') return t == 1 || cl_val_eq(a.l->items[1], b.l->items[1], d + 1);
+        return cl_val_eq(a.l->items[1], b.l->items[1], t == 0 ? d + 1 : cl_desc_skip(d + 1)); }
     case 'E': {
         if (a.l == b.l) return true;
         if (a.l->items[0].i != b.l->items[0].i) return false;
@@ -2305,6 +2504,13 @@ static void cl_show_into(cl_buf *b, cl_val v, const char *d) {
             if (k) cl_put(b, ", ", 2);
             cl_put(b, r->fields[k], strlen(r->fields[k])); cl_put(b, ": ", 2);
             cl_show_into(b, v.l->items[k], r->descs[k]); }
+        cl_put(b, ")", 1); break; }
+    case 'O': case 'Q': {  /* Some(3), None, Ok(3), Err("bad") */
+        int64_t t = v.l->items[0].i;
+        if (d[0] == 'O' && t == 1) { cl_put(b, "None", 4); break; }
+        const char *name = d[0] == 'O' ? "Some" : t == 0 ? "Ok" : "Err";
+        cl_put(b, name, strlen(name)); cl_put(b, "(", 1);
+        cl_show_into(b, v.l->items[1], d[0] == 'Q' && t == 1 ? cl_desc_skip(d + 1) : d + 1);
         cl_put(b, ")", 1); break; }
     case 'E': {  /* Moved(x: 1, y: 2), or a bare Done */
         const cl_rec_info *r = &cl_enum(d)->vs[v.l->items[0].i];
@@ -2635,7 +2841,7 @@ class Emitter:
                 return f"{ARITH_FN[e.op]}({l}, {r}, {e.tok.line}, {e.tok.col})"
             if e.op in ("==", "!=") and e.left.ty == "String":
                 return f"(strcmp({l}, {r}) {e.op} 0)"
-            if e.op in ("==", "!=") and (e.left.ty in STRUCT_IDS or e.left.ty in ENUM_IDS):
+            if e.op in ("==", "!=") and is_ref(e.left.ty) and not is_list(e.left.ty):
                 return (f"({'' if e.op == '==' else '!'}cl_val_eq((cl_val){{.l = {l}}}, (cl_val){{.l = {r}}}, "
                         f"{c_string(desc(e.left.ty))}))")
             if e.op in ("==", "!=") and is_list(e.left.ty):
