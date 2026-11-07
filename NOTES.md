@@ -191,12 +191,18 @@ design and its decisions (D1...).
   lists of Options, `Some(None)`), `err/options.cl`; 26 tests. SPEC ~1.95k words (~2.6k tokens).
   Known cascade: an `if let` line leaves its body's bound name undefined.
 
+- 2026-11-07 (night 3, wrap-up): parked D24 (c), the big-trial rerun, for next night; the window
+  ended before it. Night 3 in all: D23 (assignment through any path) and the trial rerun that it
+  fixed, the `--set big` trial, D24 designed and parts (a) and (b) built. 26 tests pass.
+
 ## Next step
 1. **Finish D24 (c):** rerun `--set big` (both models) and compare with
    `2026-11-07-1102`/`-1104`: how many sentinels remain, whether find functions return
    `Option`, how many lines each unpack costs, and any new mistakes.
 2. Maybe `join` / `contains` built-ins. Then a wrong-but-compiles trial, holes (D9), the
-   formatter (D12). Parsing (`parse_int(s) -> Result`) needs D7's Result; enums/`match` with it.
+   formatter (D12). `parse_int(s) -> Result[Int, String]` is now possible (Result exists).
+3. Small cleanups seen in part (b): the `if let` cascade (bound name undefined) and the extra
+   `not-bool` after `if i is None`.
 
 Known gaps: no list concatenation; no string iteration or indexing; nothing is freed; the `.cl`
 extension clashes with OpenCL, so the name is still provisional.
