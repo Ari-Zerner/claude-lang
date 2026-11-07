@@ -169,10 +169,88 @@ Claude differs from a human programmer in ways that matter for language design:
   through `big[0].tags` run in well under a second). The next likely habit, `for p in ps` then
   `p.score = ...`, is an error that says `p` is a copy and gives the index loop.
 
+- **D24. Enums with payloads, `Option[T]` and `Result[T, E]`, and `match`.** (2026-11-07; design
+  only, not built yet.) The big trial's clearest signal: every one of 8 programs had a find
+  function returning `-1` or `""` for "not found". That's C's idiom, and it's exactly the
+  confident-but-wrong territory of point 5: nothing makes the caller check. D7 promised `Result`
+  and exhaustive `match`; this is the concrete form.
+
+  ```
+  enum Command
+    Go(dir: String)
+    Take(item: String)
+    Look
+  end enum Command
+
+  fn find(names: List[String], name: String) -> Option[Int]
+    example find(names: ["a", "b"], name: "b") == Some(1)
+    example find(names: ["a"], name: "z") == None
+    for i in 0 until length(names)
+      if names[i] == name
+        return Some(i)
+      end if
+    end for
+    return None
+  end fn find
+
+  match find(names: names, name: "Bob")
+    case Some(i)
+      print(i)
+    case None
+      print("no Bob")
+  end match
+  ```
+  - *`enum`*, because it's what Rust, Swift and TypeScript call it and what Claude will reach for;
+    `union`, `variant`, `data`, `type X = A | B` get the fix. A variant has named fields like a
+    struct (`Go(dir: String)`) or none (`Look`). Variant names are global, like struct and
+    function names (one name, one meaning; D5), so it's `Go(dir: "east")`, not `Command.Go`;
+    `Command.Go`, `Command::Go` and `.go` get the fix. A bare variant is a value: `Look`.
+  - *Construction follows D4:* one field may be positional (`Some(3)`, `Go("east")`), more must be
+    named, in order.
+  - *`Option[T]` (`Some(x)` / `None`) and `Result[T, E]` (`Ok(x)` / `Err(e)`) are built in,* the
+    only generic enums (no user generics yet). `None` is Python's spelling too, so `return None`
+    is already right. `Option` over `Maybe`/`Optional` because Rust's names are the ones that come
+    with `Some`; `Optional[int]`, `Option<Int>`, `Maybe`, `Int?`, `T | None` get the fix. A `None`,
+    `Ok` or `Err` needs its full type from context, like `[]`: an argument, a field, a `return`, a
+    typed `var`.
+  - *No null, and no implicit wrapping:* `return i` in a function returning `Option[Int]` is a
+    type error with the fix `return Some(i)`. Kotlin and Swift would accept it, but the `Some`
+    is what tells a reader the other branch exists. `null`, `nil`, `undefined` get "there's no
+    null; a value that may be missing is `Option[T]`".
+  - *Using an `Option` as its `T` is the key diagnostic:* `items[find(...)]`, `x + 1` with `x:
+    Option[Int]`: "`x` is Option[Int], not Int; unpack it with `match`", with the `match` lines as
+    the fix. `x.unwrap()`, `x!`, `x?`, `if let`, `if x is not None` each get a targeted message.
+  - *`match` is a statement:* `match <expr>`, then `case <pattern>` lines, each followed by its
+    body, then `end match` (D2). Python's `match`/`case` shape, which fits the line-based blocks.
+    Arms never fall through and need no `break`; a `break` inside an arm applies to the enclosing
+    loop (the C uses an `if` chain, never `switch`, so this can't go wrong). Patterns: a variant;
+    a variant with bindings; `case _` (last, matches anything). Bindings: a variant with one field
+    binds it positionally (`case Some(i)`); with more, a bare name must be a field's name and binds
+    that field (`case Rect(w, h)`, in any order, so fields can't be swapped), and `field: name`
+    renames (`case Rect(w: width, h: height)`). Bound names are read-only and new (D17), scoped to
+    their arm.
+  - *Exhaustive:* every variant needs a `case`, or there's a `case _`. A missing variant is an
+    error naming it, with the missing `case` lines as the fix. A duplicate `case`, or one after
+    `case _`, is unreachable and an error. `switch`, `when`, `default:`, `case X:` (colon),
+    `=>` and `else` inside a `match` get fixes.
+  - *`==` and `print`* work like structs: `Some(3) == Some(3)`; prints `Some(3)`, `None`,
+    `Go(dir: "east")`, `Look`, so output reads back as code. `x == None` is allowed as a test, but
+    using the value still needs `match`.
+  - *C representation:* a `cl_list` again, so copy-on-write and sharing carry over unchanged:
+    item 0 is the variant's tag, items 1.. its fields. `Option` is the same with tags 0/1.
+    Descriptors: `E<n>` indexes a `cl_enums` table (variant names, field names, field
+    descriptors), `O` + T for `Option`, `Q` + T + E for `Result`.
+  - *Not decided, waiting for trial data:* a one-line unpack (`if let`-style, a `guard`, a
+    `value_or(option:, default:)`), `match` as an expression, `?` for `Result` (D7: it's concise
+    but hides control flow), and literal patterns (`case "go"`, `case 0`) for Int and String.
+    Plan: build enums and `match`, then `Option`/`Result`, then rerun the big trial and count
+    sentinels and the lines each unpack costs.
+
 ## Open questions
 
 - Memory management: value semantics with copy-on-write (D19); nothing is freed yet.
-- Generics: needed for `Result` and `List` at least. Built-in generic types only at first?
+- Generics: built-in only so far (`List`, and with D24 `Option` and `Result`). User generics wait
+  until a trial wants them.
 - Mutation: immutable by default with `var` for mutable locals? Leaning yes.
 - Modules/imports: explicit, file = module, no wildcards. Details later.
 - Effects in signatures (D-to-be): e.g. `fn main() uses io`. Valuable for point 6, cost unknown.

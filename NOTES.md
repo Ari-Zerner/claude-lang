@@ -162,12 +162,19 @@ design and its decisions (D1...).
     said "an empty list needs its type written". `[]` already works wherever the type is known, so
     SPEC now says so.
 
+- 2026-11-07 (night 3, step 3): **designed D24** (DESIGN.md): `enum` with payload variants, built-in
+  `Option[T]` (`Some`/`None`) and `Result[T, E]` (`Ok`/`Err`), and a `match` statement
+  (`case` arms, `end match`, exhaustive, `case _`). Key choices: unqualified variant names; D4
+  rules for construction; bindings positional only for one-field variants, by field name
+  otherwise (no swapped fields); no implicit wrapping (`return i` -> fix `return Some(i)`); C
+  `if` chains so `break` in an arm can't hit a `switch`; values are `cl_list`s with a tag in
+  item 0. One-line unpack forms, `match` expressions, `?` and literal patterns wait for trial data.
+
 ## Next step
-1. **Optional values** (the big trial's clearest signal): design D7's `Result` and/or an `Option`
-   with `match` (enums too?). Write the design in DESIGN.md first: what a find function returns,
-   how a caller unpacks it in one or two lines, what the habit errors are (`null`, `None`, `nil`,
-   `-1` checks can't be caught, `?`, `if let`), and the C representation. Then implement, then a
-   trial that reruns `orders`/`league`/`adventure` to see whether sentinels go away.
+1. **Build D24 in three bites:** (a) `enum` declarations, variant construction, `==`/`print`,
+   and `match` with exhaustiveness, bindings and `returns()` support, plus tests; (b) `Option` /
+   `Result` (types, `want`-typed `None`/`Ok`/`Err`, the "Option used as T" diagnostic and the
+   habit fixes), SPEC section, tests; (c) rerun `--set big` and compare sentinels and unpack cost.
 2. Maybe `join` / `contains` built-ins. Then a wrong-but-compiles trial, holes (D9), the
    formatter (D12). Parsing (`parse_int(s) -> Result`) needs D7's Result; enums/`match` with it.
 
