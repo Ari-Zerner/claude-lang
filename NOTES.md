@@ -123,15 +123,26 @@ design and its decisions (D1...).
   `ps[i]` in the right-hand side (`item.score = ps[i].score + 5`), and applied literally three
   times it would declare `var item` three times, which no-shadowing rejects.
 
+- 2026-11-07 (night 3, step 1): **general assignment paths (D23).** `ps[i].score = v`,
+  `grid[i][j] = v`, `a.b.c = v`, `p.items[0] = v`: the checker types the target as an ordinary
+  expression and needs only the root to be a `var`; codegen computes the value, then the indexes,
+  then walks with `cl_list_at` / `cl_rec_at` (each makes its level unique and returns the next
+  slot's address) and stores with `cl_list_set` / `cl_rec_set`. `x.path = append(list: x.path, ...)`
+  is an in-place push when the path's indexes are names or literals. `nested-assign` is gone;
+  `for p in ps` / `p.x = v` is now `assign-to-loop-var` saying `p` is a copy, with the index-loop
+  fix. `append(p.items, 4)` alone gets the path fix too. SPEC lost its two "one level at a time"
+  lines (~20 words shorter). New test `tests/ok/paths.cl` (copies at every level stay unchanged,
+  value-before-walk so no cycles, 100k appends through a path in ~0.1 s); 22 tests. Also fixed
+  `build -o NAME` without a slash (examples were run via PATH lookup and failed).
+  **Trial rerun** (`2026-11-07-1006-*`): structs `scores` + `segment` and lists `grid`, Haiku and
+  Sonnet: **6/6 first try** (the struct trial had both models failing `scores`). Both wrote
+  `ps[1].score = ps[1].score + 5` and `s.start.x = 0` directly, so `segment` went from SPEC's
+  three-line copy-change-store to one line.
+
 ## Next step
-1. **General assignment paths** (the struct trial's verdict on D22's open point):
-   `ps[i].score = v`, `a.b.c = v`, `grid[i][j] = v`, `p.items[0] = v`. Emit: take `&v_base`, then at
-   each level make that level unique (`cl_unshare` / record copy if rc > 1) and step to the slot's
-   address, with index checks; then store. Value semantics stay (each level is copied only if shared).
-   Then drop `nested-assign` and SPEC's "one level at a time" lines (fewer tokens), update D19/D22,
-   and rerun `--set structs --only scores segment` plus the lists `grid` task.
-2. Bigger-program trials (a 100+ line task), a wrong-but-compiles trial, holes (D9), the
-   formatter (D12). Parsing (`parse_int(s) -> Result`) needs D7's Result; enums/`match` with it.
+1. **Bigger-program trials** (a 100+ line task, e.g. an inventory or a small text-adventure state
+   machine using structs, lists, strings and loops together), now that there's enough language to
+   write one. Then a wrong-but-compiles trial, holes (D9), the formatter (D12). Parsing (`parse_int(s) -> Result`) needs D7's Result; enums/`match` with it.
 
 Known gaps: no list concatenation; no string iteration or indexing; nothing is freed; the `.cl`
 extension clashes with OpenCL, so the name is still provisional.
