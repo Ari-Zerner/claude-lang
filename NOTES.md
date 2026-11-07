@@ -201,12 +201,18 @@ design and its decisions (D1...).
    `Option`, how many lines each unpack costs, and any new mistakes.
 2. **Formal verification** (Ari, 2026-11-07: "we definitely want proofs, not just fuzzing"; see
    DESIGN.md open questions): contracts (`requires`/`ensures`), build-time counterexample search,
-   then proofs. Choose the backend first (Lean 4 core vs Z3; Lean's memory still to be measured,
-   pending Ari's OK to run it). Pairs with the wrong-but-compiles trial.
+   then proofs. Lean 4 core is the likely backend: Ari OK'd it, it's installed at
+   `/root/.local/share/lean/lean-4.35.0-linux/bin/lean` (CACHEDIR.TAG keeps it out of the off-site
+   backup; re-downloadable), and it fits the box (~55 MB anonymous, 3 s per small file; DESIGN.md).
+   `trials/lean/` has the measurement files and `probe.sh` (peak anon/file RSS).
    Ari's sanity check (2026-11-07): "is this buying Claude anything over just writing in Lean
-   directly?" Proposed (waiting on Ari): before building the verifier, a **baseline trial with
-   Claude writing proved Lean directly** on the same tasks; and, first, a **Python baseline** of
-   the existing trial sets, since no trial yet compares claude-lang with an existing language.
+   directly?" and "I expect models to get things right in Python as well. Does that undermine
+   the whole project? Maybe, but it's just for fun." So, before building the verifier:
+   - a **wrong-but-runs trial in claude-lang and Python** on the same tasks: count programs that
+     run and print a wrong answer, and bugs that are silent in Python but stop in claude-lang
+     (`xs[-1]` from a `-1` "not found", aliasing a list, `//` on negatives). First-try success on
+     small tasks can't separate the two; this can.
+   - a **Lean-direct baseline**: the same verification tasks, Claude writing proved Lean.
 3. Maybe `join` / `contains` built-ins. Then a wrong-but-compiles trial, holes (D9), the
    formatter (D12). `parse_int(s) -> Result[Int, String]` is now possible (Result exists).
 4. Small cleanups seen in part (b): the `if let` cascade (bound name undefined) and the extra

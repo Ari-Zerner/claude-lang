@@ -278,9 +278,20 @@ Claude differs from a human programmer in ways that matter for language design:
     ships `grind` (SMT-style), `omega` (linear integer arithmetic) and `bv_decide` (bit-vectors
     via the bundled CaDiCaL, i.e. 64-bit overflow). Proofs are checked by Lean's kernel, so they
     mean something even if our translation's automation is buggy; the trusted part shrinks to the
-    translation itself. Claude knows Lean far better than any proof syntax we'd invent. Memory not
-    yet measured: running the downloaded binary needs Ari's OK (auto mode blocked it). Mathlib is
-    what's too heavy (~5 GB of oleans and GBs of RAM to import).
+    translation itself. Claude knows Lean far better than any proof syntax we'd invent. Measured
+    2026-11-07 (`trials/lean/`): a file with `omega`, `grind`, `bv_decide` and an induction proof
+    checks in 3.2 s warm (10 s cold) using ~55 MB of anonymous memory; the other ~580 MB of RSS is
+    mmapped `.olean` files, which the kernel drops instead of swapping. So it fits the box. Core
+    also has `mvcgen` (Hoare-style VC generation for `do` code with `for` loops and `let mut`), the
+    same shape as our plan; a sum-loop proof written from memory worked first try, but 4.35 says
+    `mvcgen` is deprecated in favour of `vcgen`: point 1's name churn, live. Mathlib is what's too
+    heavy (~5 GB of oleans and GBs of RAM to import).
+    Ari's sanity check: "is this buying Claude anything over just writing in Lean directly?" For
+    claude-lang: everything fits in the prompt (Lean's names churn), Claude states facts and the
+    tool finds the steps (Lean tactics are written watching the goal state), and no quiet
+    defaults (`5 - 7 = 0` on Nat, `x / 0 = 0`, `xs[i]!` panics and continues with `default`).
+    For Lean: maturity, proofs about the program that runs (ours would be about a translation),
+    and `mvcgen` closing the gap. Settle it with a Lean-direct baseline trial before building.
   - *Z3* (apt `z3` 4.8.12, small): our own verification-condition generator, Dafny-style.
     Automatic and gives counterexamples, but the generator is trusted and nonlinear facts
     (`result * result <= n`) are weak.
