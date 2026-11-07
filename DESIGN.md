@@ -109,7 +109,7 @@ Claude differs from a human programmer in ways that matter for language design:
   - *0-based*, because every language Claude knows best is; 1-based would invite systematic
     off-by-one. No negative indexing (`xs[-1]` is a compile error with the `length(xs) - 1` fix),
     and an out-of-range index names the length and the last valid index.
-  - *`xs[i] = v` only one level deep* for now; `grid[i][j] = v` gets the three-line rewrite.
+  - *`xs[i] = v`* on a `var`; deeper paths like `grid[i][j] = v` since D23.
   - `List[T]` with square brackets: it's what Claude writes in Python type hints, and `<...>` would
     collide with comparison. `list[int]`, `Vec<Int>`, `Int[]` all get the fix `List[...]`.
   - No list `+` and no `concat` yet; `[0] * n` gets the fix `repeat(item: 0, times: n)`.
@@ -146,10 +146,8 @@ Claude differs from a human programmer in ways that matter for language design:
   - *Value semantics, the same as lists (D19):* a struct value is a `cl_list` with one slot per
     field, so sharing, copy-on-write and the over-counting rule all carry over unchanged. A
     million `c.n = c.n + i` updates run in place (0.07 s with 100k list-of-struct rewrites).
-  - *`p.x = v` only one level deep, like `xs[i] = v`.* `l.start.x = v`, `ps[i].x = v` and
-    `p.items[0] = v` get the three-line rewrite (`var start = l.start` ...). This is the
-    restriction most likely to cost: `ps[i].score = ...` is common. Revisit with trial data;
-    general paths are implementable (make each level unique on the way down).
+  - *`p.x = v` on a `var`.* At first only one level deep, like `xs[i] = v`; the struct trial
+    showed that cost a fix round, so D23 allows any path.
   - *No methods.* Functions take the struct as a parameter, so there is one way to call
     anything; `p.area()` stays a `method-call` error.
   - A struct can contain itself only through a list (`children: List[Tree]`): with no null, a
@@ -157,6 +155,19 @@ Claude differs from a human programmer in ways that matter for language design:
   - `print` shows `Point(x: 1, y: 2)`, the way one is made, so output reads back as code.
   - Brace habits recover: a line that is only `}` closes the innermost block, and the error
     names the right closer (`end struct Point`).
+
+- **D23. Assignment goes through any path: `ps[i].score = v`, `grid[i][j] = v`, `a.b.c = v`.**
+  (2026-11-07) D19 and D22 started with one level at a time and a three-line rewrite for deeper
+  targets. The struct trial's only first-try failure, in both models, was `ps[i].score =
+  ps[i].score + 5`, although SPEC named it as not allowed: the habit is strongest exactly where
+  records are used most (a list of them), and the rewrite was the longest pattern in the spec.
+  Value semantics are unchanged: the root must be a `var`, and the compiled code steps down the
+  path making each level unique (copying it only if it's shared), so a copy taken earlier, at any
+  level, keeps its old value. Order: the value first, then the indexes left to right, then the
+  walk; so `t.kids = append(list: t.kids, item: t)` stores the old `t`, never a cycle.
+  `p.items = append(list: p.items, item: x)` grows in place like a variable does (100k appends
+  through `big[0].tags` run in well under a second). The next likely habit, `for p in ps` then
+  `p.score = ...`, is an error that says `p` is a copy and gives the index loop.
 
 ## Open questions
 

@@ -1,9 +1,8 @@
-# expect: unknown-type unknown-type empty-list-type type-mismatch assign-to-param unknown-fn unnamed-arg unused-result type-mismatch nested-assign not-a-list type-mismatch method-call unused-result type-mismatch negative-index
+# expect: unknown-type unknown-type empty-list-type type-mismatch assign-to-param unknown-fn unnamed-arg unused-result type-mismatch not-a-list type-mismatch method-call unused-result type-mismatch negative-index
 # fix-mentions: `List[String]`
 # fix-mentions: `repeat(item: 0, times: 5)`
 # fix-mentions: `length(xs)`
 # fix-mentions: `xs = append(list: xs, item: 4)`
-# fix-mentions: `var row = g[0]`
 # fix-mentions: `xs[length(xs) - 1]`
 fn bad(xs: List[Int], names: list[str]) -> Int
   let e = []

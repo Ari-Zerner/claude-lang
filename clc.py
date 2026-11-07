@@ -1177,8 +1177,9 @@ NAME_HINTS = {"True": "write `true`", "False": "write `false`", "TRUE": "write `
 
 
 class Var:
-    def __init__(self, ty, mutable, line, param=False, loop=False):
+    def __init__(self, ty, mutable, line, param=False, loop=False, over=None):
         self.ty, self.mutable, self.line, self.param, self.loop = ty, mutable, line, param, loop
+        self.over = over  # for a loop variable walking a list variable: that variable's name
 
 
 def returns(stmts):
@@ -1377,10 +1378,8 @@ class Checker:
                 self.unknown_name(s.tok, fix=f"declare it first: `var {s.name} = ...`")
             elif self.check_mutable(s.name, v, s.tok) and v.ty and t and v.ty != t:
                 self.err_at("type-mismatch", f"`{s.name}` is {v.ty}, but the value is {t}", s.expr)
-        elif k == "setindex":
-            self.setindex(s)
-        elif k == "setfield":
-            self.setfield(s)
+        elif k in ("setindex", "setfield"):
+            self.set_path(s)
         elif k == "return":
             ret = self.cur.ret
             if s.expr is None:
@@ -1419,7 +1418,10 @@ class Checker:
                 lst, item = (a for _, _, a in e.args)
                 if [n for n, _, _ in e.args] == ["item", "list"]:
                     lst, item = item, lst
-                fix = (f"`{render(lst)} = append(list: {render(lst)}, item: {render(item)})`" if lst.kind == "name"
+                root = lst
+                while root.kind in ("index", "field"):
+                    root = root.base
+                fix = (f"`{render(lst)} = append(list: {render(lst)}, item: {render(item)})`" if root.kind == "name"
                        else None)
                 self.err_at("unused-result", "`append` returns a new list; it doesn't change the one you pass", e,
                             fix)
@@ -1481,88 +1483,53 @@ class Checker:
                 self.err("duplicate-name", f"`{s.var}` is already defined on line {prev.line}; a name means one "
                          "thing within a function", s.var_tok, "pick another name for the loop variable")
             else:
-                self.scopes[-1][s.var] = Var(vt, False, s.tok.line, loop=True)
+                over = s.src.name if s.src is not None and s.src.kind == "name" and vt else None
+                self.scopes[-1][s.var] = Var(vt, False, s.tok.line, loop=True, over=over)
         self.loops += 1
         self.block(s.body)
         self.loops -= 1
         self.scopes.pop()
 
-    def setindex(self, s):
+    def set_path(self, s):
+        """xs[i] = v, p.x = v, and any deeper path: ps[i].score = v, grid[i][j] = v, a.b.c = v (D23).
+        The root must be a `var`; every level is its own value, so only the copy being changed changes."""
         tgt = s.target
-        base = tgt.base
-        bt = self.expr(base) if base.kind != "name" else None
-        if base.kind == "index":
-            # grid[i][j] = v: one level at a time, since each level is its own value (D19).
-            outer = base.base
-            self.err_at("nested-assign", "only one level of indexing can be assigned at a time", tgt,
-                        f"`var row = {render(base)}`, then `row[{render(tgt.index)}] = {render(s.expr)}`, "
-                        f"then `{render(base)} = row`")
-            self.expr(tgt.index)
+        root = tgt
+        while root.kind in ("index", "field"):
+            root = root.base
+        if root.kind != "name":
+            self.err_at("syntax", f"can't assign into `{render(root)}`; assign to a variable or a part of one: "
+                        "`xs[i] = v`, `p.x = v`, `ps[i].x = v`", root)
             self.expr(s.expr)
             return
-        if base.kind == "field":
-            self.nested_assign(s, tgt, base, eval_base=False)  # already checked above
-            return
-        if base.kind != "name":
-            self.err_at("syntax", f"can't assign into `{render(base)}`; assign to a variable's item: `xs[i] = v`",
-                        base)
-            return
-        v = self.lookup(base.name)
-        it = self.expr(tgt.index)
+        v = self.lookup(root.name)
         if v is None:
-            self.unknown_name(base.tok)
+            self.unknown_name(root.tok)
             self.expr(s.expr)
             return
-        base.ty = v.ty
-        ok = self.check_mutable(base.name, v, base.tok)
-        et = elem(v.ty)
-        t = self.expr(s.expr, want=et)
-        if v.ty and not is_list(v.ty):
-            self.err_at("not-a-list", f"`{base.name}` is {v.ty}, not a list, so it can't be indexed", base)
+        if v.loop and v.over:
+            # for p in ps / p.score = ...: p is a copy, so this would change nothing anyone can see.
+            i = next(n for n in ("i", "j", "k", "idx", "index") if self.lookup(n) is None)
+            rest = render(tgt)[len(root.name):]
+            self.err("assign-to-loop-var", f"`{root.name}` is a copy of each item of `{v.over}`, so changing it "
+                     f"wouldn't change `{v.over}`", root.tok,
+                     f"loop over the indexes: `for {i} in 0 until length({v.over})`, then "
+                     f"`{v.over}[{i}]{rest} = ...`, using `{v.over}[{i}]` where you used `{root.name}`")
+            self.expr(tgt)
+            self.expr(s.expr)
             return
-        self.need(tgt.index, it, "Int", "[...]")
-        self.no_negative_index(tgt)
-        if ok and et and t and t != et:
-            self.err_at("type-mismatch", f"`{base.name}` is {v.ty}, so its items are {et}, but the value is {t}",
-                        s.expr)
-
-    def nested_assign(self, s, tgt, base, eval_base=True):
-        """grid[i][j] = v, ps[i].x = v, p.items[0] = v, a.b.c = v: one level at a time, since each level is
-        its own value (D19, D22)."""
-        tmp = base.name if base.kind == "field" else "item" if base.kind == "index" else "tmp"
-        if self.lookup(tmp) is not None:
-            tmp = "new_" + tmp
-        rest = f"[{render(tgt.index)}]" if tgt.kind == "index" else f".{tgt.name}"
-        self.err_at("nested-assign", "only one level can be assigned at a time", tgt,
-                    f"`var {tmp} = {render(base)}`, then `{tmp}{rest} = {render(s.expr)}`, then "
-                    f"`{render(base)} = {tmp}`")
-        if eval_base:
-            self.expr(base)
+        ok = self.check_mutable(root.name, v, root.tok)
+        tt = self.expr(tgt)
         if tgt.kind == "index":
-            self.expr(tgt.index)
-        self.expr(s.expr)
-
-    def setfield(self, s):
-        tgt = s.target
-        base = tgt.base
-        if base.kind in ("field", "index"):
-            self.nested_assign(s, tgt, base)
-            return
-        if base.kind != "name":
-            self.err_at("syntax", f"can't assign into `{render(base)}`; assign to a variable's field: `p.x = v`",
-                        base)
-            return
-        v = self.lookup(base.name)
-        if v is None:
-            self.unknown_name(base.tok)
-            self.expr(s.expr)
-            return
-        base.ty = v.ty
-        ok = self.check_mutable(base.name, v, base.tok)
-        ft = self.field_type(tgt, v.ty)
-        t = self.expr(s.expr, want=ft)
-        if ok and ft and t and t != ft:
-            self.err_at("type-mismatch", f"`{render(tgt)}` is {ft}, but the value is {t}", s.expr)
+            self.no_negative_index(tgt)
+        t = self.expr(s.expr, want=tt)
+        if ok and tt and t and t != tt:
+            b = tgt.base
+            if tgt.kind == "index" and b.ty:
+                self.err_at("type-mismatch", f"`{render(b)}` is {b.ty}, so its items are {tt}, but the value is {t}",
+                            s.expr)
+            else:
+                self.err_at("type-mismatch", f"`{render(tgt)}` is {tt}, but the value is {t}", s.expr)
 
     def field_type(self, e, bt):
         """The type of field e.name of a value of type bt, or None (reported)."""
@@ -2007,6 +1974,13 @@ static void cl_list_set(cl_list **p, int64_t i, cl_val v, const char *d, int lin
     cl_index_check(*p, i, line, col); cl_unshare(p, (*p)->len, d);
     if (CL_REF(d)) (*p)->items[i].l->rc--;
     (*p)->items[i] = v; }
+/* Assignment paths (D23): ps[i].score = v steps down with cl_list_at / cl_rec_at, which make each level
+   unique (copying it if shared) and return the slot holding the next level. */
+static cl_list **cl_list_at(cl_list **p, int64_t i, const char *d, int line, int col) {
+    cl_index_check(*p, i, line, col); cl_unshare(p, (*p)->len, d); return &(*p)->items[i].l; }
+static cl_list **cl_rec_at(cl_list **p, int k, const char *d) {
+    if ((*p)->rc > 1) { (*p)->rc--; *p = cl_rec_copy(*p, d); }
+    return &(*p)->items[k].l; }
 static void cl_list_push(cl_list **p, cl_val v, const char *d) {
     cl_unshare(p, (*p)->len * 2 + 1, d);
     cl_list *l = *p;
@@ -2186,14 +2160,8 @@ class Emitter:
                                f"{c_string(desc(elem(e.ty)))});")
                 else:
                     out.append(f"{ind}v_{s.name} = {self.own(e)};")
-            elif k == "setfield":
-                t = s.target
-                out.append(f"{ind}cl_rec_set(&v_{t.base.name}, {t.index_of}, {self.val(s.expr, own=True)}, "
-                           f"{c_string(desc(t.base.ty))});")
-            elif k == "setindex":
-                t = s.target
-                out.append(f"{ind}cl_list_set(&v_{t.base.name}, {self.expr(t.index)}, {self.val(s.expr, own=True)}, "
-                           f"{c_string(desc(elem(t.base.ty)))}, {t.tok.line}, {t.tok.col});")
+            elif k in ("setfield", "setindex"):
+                out.extend(ind + line for line in self.set_path(s))
             elif k == "return":
                 if s.expr is None:
                     out.append(f"{ind}return;")
@@ -2252,6 +2220,49 @@ class Emitter:
                        f"{v} -= {more}) {{")
         self.block(s.body, depth + 1, out)
         out.append(f"{ind}}} }}")
+
+    def set_path(self, s):
+        """C for xs[i] = v, p.x = v and deeper paths (D23). The value is computed first, then the indexes
+        left to right, then the path is walked; so `t.kids[0] = t` stores the old `t`, never a cycle."""
+        tgt, e = s.target, s.expr
+        steps = []
+        n = tgt
+        while n.kind in ("index", "field"):
+            steps.append(n)
+            n = n.base
+        steps.reverse()
+        pure = all(x.kind == "field" or x.index.kind in ("int", "name") for x in steps)
+        if (e.kind == "call" and e.name == "append" and len(e.args) == 2 and pure
+                and render(next(a for nm, _, a in e.args if nm == "list")) == render(tgt)):
+            # ps[i].items = append(list: ps[i].items, item: x): grow the list in place, as for a variable
+            item = next(a for nm, _, a in e.args if nm == "item")
+            lines = [f"{{ cl_val cl_nv = {self.val(item, own=True)};"]
+            idx = {id(x): self.expr(x.index) for x in steps if x.kind == "index"}
+            lines.append(f"  cl_list_push({self.path_ptr(tgt, idx)}, cl_nv, {c_string(desc(elem(tgt.ty)))}); }}")
+            return lines
+        lines = [f"{{ cl_val cl_nv = {self.val(e, own=True)};"]
+        idx = {}
+        for j, x in enumerate(steps):
+            if x.kind == "index":
+                idx[id(x)] = f"cl_i{j}"
+                lines.append(f"  int64_t cl_i{j} = {self.expr(x.index)};")
+        b = self.path_ptr(tgt.base, idx)
+        if tgt.kind == "index":
+            lines.append(f"  cl_list_set({b}, {idx[id(tgt)]}, cl_nv, {c_string(desc(tgt.ty))}, {tgt.tok.line}, "
+                         f"{tgt.tok.col}); }}")
+        else:
+            lines.append(f"  cl_rec_set({b}, {tgt.index_of}, cl_nv, {c_string(desc(tgt.base.ty))}); }}")
+        return lines
+
+    def path_ptr(self, e, idx):
+        """C for a cl_list ** to the slot holding e, a list or struct reached from a variable, making each
+        level on the way unique."""
+        if e.kind == "name":
+            return f"&v_{e.name}"
+        b = self.path_ptr(e.base, idx)
+        if e.kind == "index":
+            return f"cl_list_at({b}, {idx[id(e)]}, {c_string(desc(e.ty))}, {e.tok.line}, {e.tok.col})"
+        return f"cl_rec_at({b}, {e.index_of}, {c_string(desc(e.base.ty))})"
 
     def own(self, e):
         """C for e when the result is stored (a variable, list slot or return value): a list read from a
@@ -2439,7 +2450,7 @@ def main(argv=None):
         with open(cfile, "w") as fh:
             fh.write(csrc)
         if args.command == "build":
-            exe = args.output or (args.file[:-3] if args.file.endswith(".cl") else args.file + ".out")
+            exe = os.path.abspath(args.output or (args.file[:-3] if args.file.endswith(".cl") else args.file + ".out"))
         else:
             exe = os.path.join(tmp, "prog")
         if args.emit_c:

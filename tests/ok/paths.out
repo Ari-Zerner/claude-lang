@@ -1,0 +1,9 @@
+10 20 -> 15 25
+[Player(name: "Ada", score: 10, tags: ["captain"]), Player(name: "Bob", score: 20, tags: ["veteran"])]
+true
+Player(name: "Ada", score: 10, tags: [])
+[[1, 0, 0], [0, 0, 7]] [0, 0, 0]
+[[1, 0, 0], [0, 1, 0], [0, 0, 1]]
+Line(start: Point(x: 5, y: 2), stop: Point(x: 3, y: 50)) Point(x: 1, y: 2)
+Node(value: 1, kids: [Node(value: 2, kids: [Node(value: 1, kids: [Node(value: 2, kids: [])])])])
+100000 4999950000

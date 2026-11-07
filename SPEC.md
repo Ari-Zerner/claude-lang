@@ -66,8 +66,7 @@ There are no other types yet: no floats, maps, enums, null. Nothing converts imp
 - `append(list: xs, item: x)` **returns a new list** with `x` added; it doesn't change `xs`.
   To grow a variable: `xs = append(list: xs, item: x)` (this is fast).
 - `repeat(item: 0, times: n)` is a list of `n` copies of `0`.
-- `xs[i] = x` changes one item of a `var` list. Only one level at a time: for a list of lists,
-  `var row = grid[i]`, `row[j] = x`, `grid[i] = row`.
+- `xs[i] = x` changes one item of a `var` list; `grid[i][j] = x` changes one item of one row.
 - **Lists are values, like `Int`s:** `var ys = xs` copies, so changing `ys` never changes
   `xs`, and a function can't change a list it's given. (Copies are made only when needed.)
 - `==` compares items; `print` and `{xs}` show `[1, 2, 3]` (strings inside are quoted).
@@ -105,8 +104,8 @@ end struct Point
   struct or a list (`children: List[Tree]`).
 - **Make one by calling its name with every field named**, in the declared order:
   `Point(x: 1, y: 2)`. There's no `new` and no `Point { ... }`.
-- `p.x` reads a field; `p.x = 5` changes one field of a `var`. Only one level at a time:
-  `var s = line.start`, `s.x = 5`, `line.start = s` (the same for `ps[i].x = 5`).
+- `p.x` reads a field; `p.x = 5` changes one field of a `var`, at any depth: `line.start.x = 5`,
+  `ps[i].score = 0`, `p.items[0] = 1`.
 - Structs are values, like lists: `var q = p` copies, and a function can't change one it's given.
 - `==` compares every field; `print` and `{p}` show `Point(x: 1, y: 2)`.
 - There are no methods: write a function that takes the struct, `fn area(r: Rect) -> Int`.

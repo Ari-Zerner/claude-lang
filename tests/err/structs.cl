@@ -1,11 +1,10 @@
-# expect: syntax syntax unknown-type syntax recursive-struct closer-name bad-char closer-kind duplicate-fn unnamed-arg bad-char syntax arg-count arg-order nested-assign no-field assign-to-let no-field nested-assign unused-result nested-assign type-mismatch
+# expect: syntax syntax unknown-type syntax recursive-struct closer-name bad-char closer-kind duplicate-fn unnamed-arg bad-char syntax arg-count arg-order no-field assign-to-let no-field unused-result type-mismatch assign-to-loop-var unnamed-arg unused-result
 # fix-mentions: `Point(x: 1, y: 2)`
-# fix-mentions: `var start = l.start`
+# fix-mentions: `ps[i].x = ...`
 # fix-mentions: `length(xs)`
-# fix-mentions: `var item = ps[0]`
+# fix-mentions: `bx.items = append(list: bx.items, item: 2)`
 # fix-mentions: `next: List[Node]`
 # fix-mentions: `Point(x: 1, y: ...)`
-# fix-mentions: `var items = bx.items`
 # fix-mentions: `end struct Pair`
 struct Point
   x: Int
@@ -53,5 +52,9 @@ fn main() uses io
   var bx = Box(w: 1, h: 2, items: [])
   bx.items[0] = 1
   bx.w = "wide"
+  for p in ps
+    p.x = 0
+  end for
+  append(bx.items, 2)
   print("{b} {c} {d} {e} {l} {ps} {bx}")
 end fn main
