@@ -58,8 +58,9 @@ There are no other types yet: no floats, maps, enums, null. Nothing converts imp
 
 ## Lists
 
-- `[a, b, c]` makes a list; every item has the same type. An empty list needs its type
-  written: `var xs: List[Int] = []`.
+- `[a, b, c]` makes a list; every item has the same type. `[]` works wherever the type is
+  known (`f(xs: [])`, `Box(items: [])`, `return []`); a new variable needs it written:
+  `var xs: List[Int] = []`.
 - `xs[i]` is the item at index `i`, **counting from 0**; the last is `xs[length(xs) - 1]`.
   There's no negative indexing. An index out of range stops the program.
 - `length(xs)` is the number of items.

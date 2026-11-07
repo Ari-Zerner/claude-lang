@@ -139,10 +139,37 @@ design and its decisions (D1...).
   `ps[1].score = ps[1].score + 5` and `s.start.x = 0` directly, so `segment` went from SPEC's
   three-line copy-change-store to one line.
 
+- 2026-11-07 (night 3, step 2): **bigger-program trial** (`--set big`, 4 tasks with exact output:
+  `league` standings with three tie-break levels, `orders` with stock and per-customer totals, `life`
+  on an 8x10 grid with dead edges, `adventure` with rooms, exits, a locked door and items;
+  `2026-11-07-1102-big-haiku`, `-1104-big-sonnet`). **Both 4/4 first try**, 48-130 lines per program
+  (`trial.py` now logs non-comment line counts). Findings:
+  - **D23 paid off at once:** 31 lines across the 8 programs assign through a deep path
+    (`items[ii].stock = items[ii].stock - o.qty`, `ts[h].points = ...`, `nxt[r][c] = ...`,
+    `t.rooms[t.room] = rest`, `r.items[i].place = "player"`). Before D23 each was a compile error.
+  - **Every program invents a "not found" sentinel:** `-1` from 6 hand-written find/index_of
+    functions, `""` from Haiku's exit lookup, `-1` from Sonnet's. It works (a missed check traps
+    at `xs[-1]` with a clear message), but it's the C idiom, and it's the clearest pressure yet for
+    an optional value (D7's `Result`, or an `Option`) with `match`.
+  - **Hand-written helpers:** string join with a separator 4 times (a `first` flag or
+    `if line == ""`), list `contains` twice. Candidates for a small built-in set
+    (`join(list:, with:)`, `contains(list:, item:)`), weighed against SPEC tokens.
+  - **State threading** is how both modelled mutable game state: `w = goTo(w: w, dir: "east")`, the
+    function returning an updated copy. Natural with value semantics; no one tried to mutate a parameter.
+  - Sonnet hand-translated the league's team names to indexes (`let home = [0, 2, 4, ...]`): correct,
+    but brittle. Haiku looked names up.
+  - Two programs declared a typed empty variable just to pass `[]` to a constructor, because SPEC
+    said "an empty list needs its type written". `[]` already works wherever the type is known, so
+    SPEC now says so.
+
 ## Next step
-1. **Bigger-program trials** (a 100+ line task, e.g. an inventory or a small text-adventure state
-   machine using structs, lists, strings and loops together), now that there's enough language to
-   write one. Then a wrong-but-compiles trial, holes (D9), the formatter (D12). Parsing (`parse_int(s) -> Result`) needs D7's Result; enums/`match` with it.
+1. **Optional values** (the big trial's clearest signal): design D7's `Result` and/or an `Option`
+   with `match` (enums too?). Write the design in DESIGN.md first: what a find function returns,
+   how a caller unpacks it in one or two lines, what the habit errors are (`null`, `None`, `nil`,
+   `-1` checks can't be caught, `?`, `if let`), and the C representation. Then implement, then a
+   trial that reruns `orders`/`league`/`adventure` to see whether sentinels go away.
+2. Maybe `join` / `contains` built-ins. Then a wrong-but-compiles trial, holes (D9), the
+   formatter (D12). Parsing (`parse_int(s) -> Result`) needs D7's Result; enums/`match` with it.
 
 Known gaps: no list concatenation; no string iteration or indexing; nothing is freed; the `.cl`
 extension clashes with OpenCL, so the name is still provisional.

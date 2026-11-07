@@ -5,7 +5,7 @@ For each task: ask a headless `claude -p` (no tools) for a program, compile it w
 and if it fails, hand back the diagnostics once and ask for a fixed version. Every attempt,
 diagnostic and output is written to trials/results/<run>.md; those mistakes are design input.
 
-  python3 trials/trial.py [--set basic|hard|lists] [--model sonnet] [--only NAME ...]
+  python3 trials/trial.py [--set basic|hard|lists|structs|big] [--model sonnet] [--only NAME ...]
 """
 import argparse
 import datetime
@@ -109,7 +109,54 @@ STRUCTS = [  # each baits a habit: methods, in-place nested updates, mutation th
     ("by-age", "People have a name and an age: Ann is 31, Bob is 25, Cy is 40. Sort them by age, youngest first, "
      "with a sort you write yourself, and print their names, one per line.", "Bob\nAnn\nCy\n"),
 ]
-SETS = {"basic": BASIC, "hard": HARD, "lists": LISTS, "structs": STRUCTS}
+# Bigger programs (aim: 80-150 lines) that use structs, lists, strings and loops together, with exact output.
+BIG = [
+    ("league", "Five teams play in a league, listed in this order: Lions, Tigers, Bears, Wolves, Hawks. The "
+     "results, as home team, home goals, away team, away goals: Lions 2 Tigers 1; Bears 0 Wolves 0; Hawks 3 "
+     "Lions 3; Lions 1 Bears 3; Tigers 2 Wolves 2; Hawks 1 Bears 1; Wolves 1 Lions 0; Tigers 4 Hawks 1; "
+     "Bears 1 Tigers 2; Wolves 2 Hawks 4. A win is worth 3 points, a draw 1, a loss 0. Print the standings, "
+     "one team per line as its name, points and goal difference (goals scored minus goals conceded) "
+     "separated by single spaces, like `Lions 4 -2`. Order: most points first; on equal points, the larger "
+     "goal difference first; if that is equal too, more goals scored first.",
+     "Tigers 7 3\nBears 5 1\nHawks 5 -1\nWolves 5 -1\nLions 4 -2\n"),
+    ("orders", "A shop stocks three items, each with a price and a quantity in stock: apple (price 3, 10 in "
+     "stock), bread (price 5, 2 in stock), cheese (price 12, 1 in stock). Process these orders in turn, each a "
+     "customer, an item and a quantity: Ann apple 4; Bob bread 3; Cy cheese 1; Ann bread 2; Dee cheese 1; "
+     "Bob apple 6; Cy fig 1; Ann apple 1. For each order print one line: if the shop doesn't sell the item, "
+     "`<customer> <item> unknown`; if there isn't enough in stock, `<customer> <item> short` (nothing is "
+     "sold); otherwise the order is filled, the stock goes down, and the line is `<customer> <item> "
+     "<quantity> <cost>`, where cost is quantity times price. After all the orders, print each item's "
+     "remaining stock as `<item> <quantity>` in the order listed above, then each customer's total spending "
+     "as `<customer> <total>` in the order they first ordered (including customers who bought nothing), "
+     "then the shop's total revenue as a bare number.",
+     "Ann apple 4 12\nBob bread short\nCy cheese 1 12\nAnn bread 2 10\nDee cheese short\nBob apple 6 18\n"
+     "Cy fig unknown\nAnn apple short\napple 0\nbread 0\ncheese 0\nAnn 22\nBob 18\nCy 12\nDee 0\n52\n"),
+    ("life", "Run Conway's Game of Life on a grid of 8 rows and 10 columns. Cells beyond the edges count as "
+     "dead (the grid does not wrap around). Rows and columns are numbered from 0; the live cells at the start, "
+     "as (row, column), are (0, 1), (1, 2), (2, 0), (2, 1), (2, 2), (5, 9), (6, 9), (7, 9). A live cell with "
+     "2 or 3 live neighbours (of its 8) stays alive, a dead cell with exactly 3 becomes alive, and every "
+     "other cell is dead in the next generation. Run 6 generations. First print one line with the number of "
+     "live cells after each generation, separated by single spaces. Then print the grid after the last "
+     "generation, one line per row, `#` for live and `.` for dead.",
+     "7 5 5 5 5 5\n..........\n..........\n...#......\n.#.#......\n..##......\n..........\n..........\n"
+     "..........\n"),
+    ("adventure", "Write a small text adventure that runs a fixed list of commands. Rooms: Hall, Library, "
+     "Kitchen, Vault. Exits: from Hall, north goes to Library and east to Kitchen; from Library, south goes to "
+     "Hall; from Kitchen, west goes to Hall and down to Vault; from Vault, up goes to Kitchen. The way down "
+     "from Kitchen is locked unless the player carries the key. Items at the start: Library has key, Kitchen "
+     "has bread, Vault has gold. The player starts in Hall carrying nothing. Commands: `go <direction>` moves "
+     "and prints the new room's name, or prints `You can't go <direction>.` if there's no such exit, or `The "
+     "way down is locked.` if it's the locked way and the player has no key. `take <item>` moves the item "
+     "from the room to the player and prints `Taken: <item>.`, or prints `There is no <item> here.`. `look` "
+     "prints the room's name, then a line with the room's items separated by single spaces, or `nothing`. "
+     "`inventory` prints the carried items in the order they were taken, separated by single spaces, or "
+     "`nothing`. Run these commands in order: go east, take key, take bread, go down, go west, go north, look, "
+     "take key, go south, go east, go down, take gold, look, go up, go up, inventory.",
+     "Kitchen\nThere is no key here.\nTaken: bread.\nThe way down is locked.\nHall\nLibrary\nLibrary\nkey\n"
+     "Taken: key.\nHall\nKitchen\nVault\nTaken: gold.\nVault\nnothing\nKitchen\nYou can't go up.\n"
+     "bread key gold\n"),
+]
+SETS = {"basic": BASIC, "hard": HARD, "lists": LISTS, "structs": STRUCTS, "big": BIG}
 
 PROMPT = """Below is the complete specification of a new programming language, claude-lang.
 You have never seen it before; rely only on this spec.
@@ -228,6 +275,8 @@ def main():
                     log.append("_Sent the diagnostics back for a fix._\n")
                     code = extract(claude(FIX_PROMPT.format(spec=spec, task=task, code=code, diags=diags),
                                           args.model))
+        size = sum(1 for l in code.splitlines() if l.strip() and not l.strip().startswith("#"))
+        result += f" ({size} lines)"
         rows.append((name, result))
         print(f"{name}: {result}", flush=True)
     log.insert(1, "| task | result |\n|---|---|\n" + "".join(f"| {n} | {r} |\n" for n, r in rows))
