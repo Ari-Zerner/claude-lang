@@ -219,6 +219,29 @@ design and its decisions (D1...).
     because it added structs; Sonnet's 62 -> 52 with parallel lists), so per-feature line savings
     need the same program written twice, not two fresh runs.
 
+- 2026-11-08 (night 4, step 2): **hidden-input trial, claude-lang vs Python** (`trials/hidden.py`;
+  `2026-11-08-1104-hidden-cl-haiku`, `-1106-hidden-py-haiku`). 12 function tasks (rotate with
+  negative/large k, second largest as `Option`, a grid spread with edge neighbours, window sums,
+  merging ranges, lower bound, digit sum of negatives, run lengths, days until warmer, bracket
+  balance, max subarray with all-negative inputs, median rounding toward negative infinity), each
+  with one shown example, one fix round on it in either language, then 6-10 hidden inputs graded
+  ok / wrong (silent) / error (stopped). `--selftest` checks every expected value round-trips
+  through the real compiler. **Haiku: 94/94 hidden inputs right in both languages**, 0 wrong,
+  0 errors. Ari's prediction holds: on familiar problems with clear specs there are no wrong
+  answers for claude-lang to stop, so this task set can't separate the languages either.
+  - **Cost:** claude-lang functions are ~2.7x longer (275 non-example lines vs Python's 102):
+    no built-in sort (Haiku wrote insertion sort twice), no slicing, `sum`, `max` or `abs`.
+  - **Examples:** Haiku wrote 78 `example` lines unprompted, many on exactly the hidden edge cases
+    (`median(xs: [-1, -2]) == -2`). The Python prompt said "no tests" (so nothing runs on import),
+    which is a bias: a fairer Python arm would allow doctests and run them.
+  - **A real trap, interpolation by default (D18):** `balanced` wrote `"{"` five times; in
+    claude-lang that starts an interpolation. Fixed in one round from the diagnostic, but each such
+    line got two errors and the first is wrong (`unclosed-string`: "no closing `\"`", though there
+    is one); only the second (`unclosed-interpolation`, "write `\{`") is right. Python's f-strings
+    are opt-in, so this trap is ours alone.
+  - Haiku got floor rounding right in claude-lang without `//` (sign-adjusted halves, overflow-safe
+    too), with examples on the negative cases.
+
 ## Next step
 1. **Formal verification** (Ari, 2026-11-07: "we definitely want proofs, not just fuzzing"; see
    DESIGN.md open questions): contracts (`requires`/`ensures`), build-time counterexample search,
@@ -230,12 +253,12 @@ design and its decisions (D1...).
    Ari's sanity check (2026-11-07): "is this buying Claude anything over just writing in Lean
    directly?" and "I expect models to get things right in Python as well. Does that undermine
    the whole project? Maybe, but it's just for fun." So, before building the verifier:
-   - a **wrong-but-runs trial in claude-lang and Python** on the same tasks: count programs that
-     run and print a wrong answer, and bugs that are silent in Python but stop in claude-lang
-     (`xs[-1]` from a `-1` "not found", aliasing a list, `//` on negatives). First-try success on
-     small tasks can't separate the two; this can. Likely shape: each task is a function graded
-     on hidden inputs (edge cases, larger values) beyond the one shown, so a packed sort key or an
-     off-by-one shows up as a wrong answer instead of passing.
+   - the **wrong-but-runs trial** (`trials/hidden.py`) is built; the first task set was too
+     familiar (Haiku 94/94 in both languages, night 4 step 2). Next: **rule-dense tasks a model
+     hasn't memorized** (a parking fee with a grace period and a daily cap, adding days to a date
+     across leap years, a scoring game with unusual tie rules, a tax with brackets and rounding),
+     so there are wrong answers to count, then Sonnet too. Allow Python doctests in that run.
+   - fix the `"{"` diagnostic first: one error at the brace, not `unclosed-string` too.
    - a **Lean-direct baseline**: the same verification tasks, Claude writing proved Lean.
 2. Maybe `join` / `contains` built-ins (both adventure programs wrote `contains` and a join again).
    `match` expressions and a `Map` wait for more than one model wanting them (see night 4, step 1).
