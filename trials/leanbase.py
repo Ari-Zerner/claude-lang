@@ -81,6 +81,14 @@ and proves these theorems, with exactly these names and statements:
 No `sorry`, no `axiom`, no `native_decide`. The definition must compute (it will be run with `#eval`).
 Reply with only the code, in one ```lean code block."""
 
+# --hints: the core-vs-Mathlib names both models tripped on in the first run (checked against Lean 4.35).
+HINTS = """
+Core Lean is not Mathlib. These don't exist here: `split_ifs` (use `split`), `linarith`, `nlinarith`,
+`ring`, `norm_num`, `positivity`, `interval_cases`, `Nat.strong_induction_on`. Use `omega` for linear
+arithmetic over Nat and Int (it handles `/` and `%` by constants), `grind` for nonlinear facts such as
+ring identities, `simp`, `decide`, and `induction n using Nat.strongRecOn with | ind n ih => ...` for
+strong induction."""
+
 FIX = """{prompt}
 
 You wrote:
@@ -165,15 +173,18 @@ def main():
     ap.add_argument("--model", default="haiku")
     ap.add_argument("--only", nargs="*")
     ap.add_argument("--rounds", type=int, default=2, help="fix rounds after the first try")
+    ap.add_argument("--hints", action="store_true", help="add the core-vs-Mathlib name note to the prompt")
     args = ap.parse_args()
     stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d-%H%M")
-    out_path = os.path.join(HERE, "results", f"{stamp}-leanbase-{args.model}.md")
+    out_path = os.path.join(HERE, "results", f"{stamp}-leanbase{'-hints' if args.hints else ''}-{args.model}.md")
     rows, log = [], [f"# Lean-direct baseline {stamp} ({args.model})\n"]
     for task in TASKS:
         if args.only and task["name"] not in args.only:
             continue
         thms = "\n".join(f"    theorem {n} : {s}" for n, s in task["thms"])
         prompt = PROMPT.format(sig=task["sig"], text=task["text"], thms=thms)
+        if args.hints:
+            prompt = prompt.replace("\nReply with only", HINTS + "\n\nReply with only")
         log.append(f"## {task['name']}\n\n```\n{thms}\n```\n")
         result, lean_secs = "fail", []
         with tempfile.TemporaryDirectory() as tmp:

@@ -273,6 +273,34 @@ design and its decisions (D1...).
     a field): exhaustive `match` points at every place a new variant must be handled, where a Python
     `if`/`elif` chain falls through silently, and the hidden inputs become regression tests.
 
+- 2026-11-08 (night 4, step 5): **Lean-direct baseline** (`trials/leanbase.py`; Ari's "is this buying
+  Claude anything over just writing in Lean directly?"). Six tasks: write a Lean 4 core function and
+  prove fixed theorem statements (sum formula; isqrt's two bounds; list max is >= every item and is
+  one of them; insertion sort is sorted and a permutation; tax and parking fee are monotone, fee
+  bounded). The harness restates each theorem (a weakened statement fails), rejects `sorry`/axioms/
+  `native_decide` via `#print axioms`, and pins behaviour with hidden `#eval`s; two fix rounds.
+  - **No hints** (`2026-11-08-1403-leanbase-haiku`, `-1407-...-sonnet`): **Haiku 5/6 (4 first try),
+    Sonnet 5/6 (4 first try).** Proofs are real: isqrt via a search function and three lemmas,
+    insertion sort sorted + `Perm`, tax monotone by `unfold tax; omega`. Each failure was a
+    **Mathlib name in core Lean**, repeated through both fix rounds: Haiku's `split_ifs` (core has
+    `split`; Lean says only "unknown tactic", not which or what to use), Sonnet's
+    `Nat.strong_induction_on` ("Unknown constant").
+  - **With a 6-line "core is not Mathlib" note** (`--hints`; `-1411-leanbase-hints-haiku`,
+    `-1416-...-sonnet`, isqrt only): **Haiku 6/6 (3 first try), Sonnet's isqrt first try.** Every
+    task proved by both models. Haiku's tax took 2 fixes this time on "maximum recursion depth has
+    been reached", which doesn't say what recursed.
+  - Lean's quiet defaults helped here: Haiku's tax is 4 lines because `Nat` subtraction stops at 0
+    (`min income 40000 - 10000` is 0 below 10000, `- 500` never goes negative). The hidden evals
+    confirm it's right.
+  - Lean took 1.5-10 s per check (23 s once, cold, under memory pressure).
+  - **What it means for claude-lang:** for small functions, proved Lean is within reach of both
+    models today, and the main obstacle is a name table that fits in a paragraph. So "Claude can't
+    write proofs" isn't a gap claude-lang needs to fill at this scale. What's left for it: the error
+    quality (a named fix where Lean says "unknown tactic"), one small spec instead of Lean's churning
+    library, and contracts that automation closes without a written proof (`omega` closed tax in one
+    line). A thought for Ari: compile claude-lang to Lean rather than C, so the program that runs is
+    the one that's proved.
+
 ## Next step
 1. **Formal verification** (Ari, 2026-11-07: "we definitely want proofs, not just fuzzing"; see
    DESIGN.md open questions): contracts (`requires`/`ensures`), build-time counterexample search,
@@ -290,7 +318,13 @@ design and its decisions (D1...).
      request (a new command or enum variant, a new pricing rule), then grade on hidden regression
      inputs plus the new behaviour. That's where exhaustive `match` and value semantics should matter,
      if anywhere. Sonnet only once a set separates anything.
-   - a **Lean-direct baseline**: the same verification tasks, Claude writing proved Lean.
+   - the **Lean-direct baseline** is done (night 4, step 5): with a 6-line name note, both models
+     proved all six tasks. Next for verification: decide with Ari whether claude-lang's proofs
+     should target Lean (compile claude-lang to Lean, or emit Lean obligations from
+     `requires`/`ensures` and let `omega`/`grind` close them), given that Lean-direct works this well.
+     Harder Lean tasks (a loop with an invariant, binary search) would show where Lean-direct breaks.
+   - a **change trial** (modify an existing program) is still the best place left for exhaustive
+     `match` to show, if it shows anywhere (see night 4, step 4).
 2. Maybe `join` / `contains` built-ins (both adventure programs wrote `contains` and a join again).
    `match` expressions and a `Map` wait for more than one model wanting them (see night 4, step 1).
 3. Then a wrong-but-compiles trial, holes (D9), the

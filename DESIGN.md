@@ -313,6 +313,12 @@ Claude differs from a human programmer in ways that matter for language design:
     defaults (`5 - 7 = 0` on Nat, `x / 0 = 0`, `xs[i]!` panics and continues with `default`).
     For Lean: maturity, proofs about the program that runs (ours would be about a translation),
     and `mvcgen` closing the gap. Settle it with a Lean-direct baseline trial before building.
+    *Baseline result (2026-11-08, `trials/leanbase.py`):* six small write-and-prove tasks (isqrt,
+    insertion sort sorted + permutation, tax and parking monotone, ...): Haiku and Sonnet each proved
+    5/6 unaided; both failures were Mathlib names in core (`split_ifs`, `Nat.strong_induction_on`)
+    that Lean's errors don't correct. With a 6-line name note, both proved everything. So at this
+    scale Lean-direct works, and claude-lang's case narrows to diagnostics, a stable spec, and
+    automation that needs no written proof. Compiling claude-lang to Lean is worth weighing.
   - *Z3* (apt `z3` 4.8.12, small): our own verification-condition generator, Dafny-style.
     Automatic and gives counterexamples, but the generator is trusted and nonlinear facts
     (`result * result <= n`) are weak.
