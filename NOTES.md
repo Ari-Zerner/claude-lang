@@ -322,6 +322,18 @@ design and its decisions (D1...).
   everything within two fixes once core-vs-Mathlib names were hinted. The verification direction is
   now a question for Ari (see Next step 1).
 
+- 2026-11-08 (day, Ari in #claude-lang: "No opinion, make a judgement call" on night 4's question):
+  **D26: claude-lang compiles to Lean 4**, so the program that runs is the one that's proved;
+  no error layer over Lean-direct, and no Lean model beside the C backend. Reasons and plan in
+  DESIGN.md D26. A hand-written spike (`trials/lean/backend_spike.lean`) checked the parts that could
+  have sunk it: Lean's bundled `leanc` builds a native binary on the box (lean -c 1.4-7 s, leanc -O1
+  1.5-5 s, both noisy under load); Arrays update in place (1M push + 1M set: 0.05 s at -O1);
+  a `clTrap` (kernel: `default`; run time: flush, `runtime error: ...`, exit 70) stops the program
+  where Lean's own `panic!` prints and carries on (the spike's "not reached" line printed). Two Lean
+  gotchas on the way: a trap whose match arms all return `default` gets compiled away (the result
+  must flow out of the IO), and `implemented_by` needs both functions in `Type` (universe mismatch).
+  A contract (`tax` nonnegative) closed with `split`/`omega`, nothing hand-proved.
+
 ## Next step
 1. **Formal verification** (Ari, 2026-11-07: "we definitely want proofs, not just fuzzing"; see
    DESIGN.md open questions): contracts (`requires`/`ensures`), build-time counterexample search,
@@ -339,14 +351,15 @@ design and its decisions (D1...).
      request (a new command or enum variant, a new pricing rule), then grade on hidden regression
      inputs plus the new behaviour. That's where exhaustive `match` and value semantics should matter,
      if anywhere. Sonnet only once a set separates anything.
-   - the **Lean-direct baseline** is done (night 4, step 5): with a 6-line name note, both models
-     proved all six tasks. Next for verification: decide with Ari whether claude-lang's proofs
-     should target Lean (compile claude-lang to Lean, or emit Lean obligations from
-     `requires`/`ensures` and let `omega`/`grind` close them), given that Lean-direct works this well.
-     Harder tasks didn't break it (night 4, step 6: loop invariant, binary search, gcd, RLE all
-     proved). The open question is now mostly Ari's: what claude-lang's proofs should add, given
-     that. Candidates: a much better error layer over Lean (name fixes, the goal in claude-lang
-     terms), or compiling claude-lang to Lean so contracts are proved about the code that runs.
+   - the **Lean-direct baseline** is done (night 4, steps 5-6): with a 6-line name note, both models
+     proved all 14 tasks. Ari left the direction to us, and **D26 decides it: compile claude-lang to
+     Lean 4.** Next: **D26 stage 1**, a Lean backend (`clc.py --backend lean`, or a separate
+     `cl_lean.py` module if clc.py gets unwieldy) for Int/Bool/String, functions, `if`/`while`/`for`,
+     `print` and examples (as `#guard`s), run beside C, with `tests/run.py` running both and
+     comparing output. Start from `trials/lean/backend_spike.lean` (the `clTrap` pattern and the
+     build commands). Watch the build time, since trials compile a lot: if lean + leanc stays above
+     ~5 s, try checking examples with `lean` alone and building the binary only to run. Then stages
+     2-5 (DESIGN.md D26).
    - a **change trial** (modify an existing program) is still the best place left for exhaustive
      `match` to show, if it shows anywhere (see night 4, step 4).
 2. Maybe `join` / `contains` built-ins (both adventure programs wrote `contains` and a join again).

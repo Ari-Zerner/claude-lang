@@ -35,7 +35,8 @@ Claude differs from a human programmer in ways that matter for language design:
 
 - **D1. Implementation: the compiler is Python 3, and its output is C compiled by gcc.** Both are
   already on the box; there's no build step for the compiler itself, and C output is easy to read
-  when debugging. (Possible later: self-host, or emit something else directly.)
+  when debugging. (Possible later: self-host, or emit something else directly.) D26 replaces
+  the C output with Lean 4 once the Lean backend passes every test.
 - **D2. Blocks end with a named closer:** `fn parse ... end fn parse`, `if ... end if`. It's
   redundant on purpose: a mismatch is reported right where it happens ("`end if` closes the `if`
   on line 12, but the innermost open block is the `loop` on line 15").
@@ -79,7 +80,8 @@ Claude differs from a human programmer in ways that matter for language design:
   carrying over another language's habits is the most likely mistake when writing a language
   that isn't in the training data.
 - **D16. Runtime errors are checked, never undefined:** integer overflow and division by zero
-  stop the program with `file:line:col: runtime error: ...` (exit code 70).
+  stop the program with `file:line:col: runtime error: ...` (exit code 70). With D26, `Int` becomes
+  unbounded, so overflow can't happen; division by zero and bad indexes stay traps.
 - **D17. Names can't be reused within a function** (no shadowing), and an unused result of a call
   is an error (`let _ = f(x)` discards on purpose). Both are frequent sources of quiet bugs.
 
@@ -276,6 +278,51 @@ Claude differs from a human programmer in ways that matter for language design:
   (`["\{", "\}"]`) so output reads back as code. SPEC doesn't mention the rule: code that relies
   on it just works.
 
+- **D26. claude-lang compiles to Lean 4, so the proved program is the one that runs.** (2026-11-08;
+  decided, not built. Night 4 asked Ari: compile to Lean, or an error/automation layer over Claude
+  writing Lean directly? Ari: "No opinion, make a judgement call.")
+  - *What changes is the backend.* The front end (lexer, parser, checker, every diagnostic and
+    habit fix) stays. Codegen emits Lean 4 instead of C, Lean's bundled toolchain builds the binary
+    (`lean -c`, then `leanc`, its own clang), and `requires`/`ensures`/`invariant` become theorems
+    about those same definitions. The compiler tries the automation itself (`omega`, `grind`,
+    `simp`, `decide`, `vcgen` for loops) and reports what it couldn't prove at the claude-lang line,
+    in claude-lang terms. Claude doesn't write Lean.
+  - *Not an error layer over Lean-direct:* the baseline (night 4) found the main obstacle was
+    core-vs-Mathlib names, and a 6-line note already fixes most of that, so a wrapper has little
+    left to add. It would also leave claude-lang out of verification, and Lean code that isn't
+    proved keeps the quiet defaults point 5 is about (`5 - 7 = 0` on Nat, `x / 0 = 0`, `xs[i]!`
+    panics and carries on with `default`). That work isn't wasted: the escape hatch needs it (below).
+  - *Not a Lean model beside the C backend:* then the proof is about a translation, and two
+    backends can disagree. With one backend, a proved function is the function that runs. Lean's
+    compiler and runtime are now trusted for running, as gcc was; the kernel still checks every proof.
+  - *The fit is close* (spike: `trials/lean/backend_spike.lean`). Lean's runtime already does D19:
+    values are refcounted and updated in place when unshared (1M `push` + 1M `set!` in 0.05 s at
+    `-O1`). Structs map to `structure`, enums to `inductive`, `Option`/`Result` to `Option`/`Except`,
+    `match` to `match`, `var` and `for` to `do` with `let mut` and `for`. Lean frees memory, which
+    closes "nothing is freed". D16's traps are a `clTrap` that the kernel sees as `default` and that
+    at run time flushes stdout, prints `runtime error: ...` and exits 70, so a trap can't make a
+    proof true, and a proof can show one is unreachable. Generated code never uses Lean's own
+    `panic!`, which prints and then carries on with `default` (the spike printed "not reached").
+  - *`Int` becomes unbounded* (Lean's `Int`, like Python's). Overflow can't happen, so D16's
+    overflow trap goes away rather than catching it. Proofs get much easier: `omega` works on `Int`
+    directly, while 64-bit arithmetic needs bit-blasting (`bv_decide`), which is weak on
+    multiplication (`result * result <= n`). Lean keeps small ints unboxed, so the common case stays
+    fast. Division by zero and bad indexes stay traps.
+  - *Costs:* a build takes ~3-12 s on this box (lean, then leanc at `-O1`) instead of ~0.15 s.
+    `example`s can run during elaboration (`#guard`), before the native step, so a failing example
+    comes back in ~2 s. A Lean error in generated code is a compiler bug; the only Lean output a
+    user sees is an unproved goal, mapped back. And rewriting the backend will take many nights.
+  - *Plan, each stage useful alone:* (1) a Lean backend for Int/Bool/String, functions,
+    `if`/`while`/`for`, `print` and examples, run beside C, with `tests/run.py` comparing output;
+    (2) lists, structs, enums, `Option`/`Result`, `match`, with print formats identical to C's;
+    (3) Lean becomes the default once every test passes, and C retires; (4) `requires`/`ensures`
+    checked at run time, then proved by the automation, with `invariant` on loops; (5) the trial
+    that answers Ari's sanity check: the Lean-direct baseline's tasks written in claude-lang with
+    contracts, compared on success, fix rounds and how much Claude has to write.
+  - *Escape hatch, open:* when the automation can't close a goal, the first hint is in claude-lang:
+    a helper function whose `ensures` states the missing fact, which works as a lemma. A raw Lean
+    `proof` block is the last resort, and that's where the name-table error layer goes.
+
 ## Open questions
 
 - Memory management: value semantics with copy-on-write (D19); nothing is freed yet.
@@ -294,7 +341,8 @@ Claude differs from a human programmer in ways that matter for language design:
   `ensures`, which is the concrete counterexample a point-4 diagnostic needs; (c) **proofs, the
   goal**, with `invariant` lines on loops; they would also prove D16's traps can't fire. (b) is a
   stepping stone and the counterexample finder, not a substitute for (c).
-  Backend for (c), *open*:
+  Backend for (c): **decided in D26, Lean 4, with claude-lang compiled to Lean.** The notes that
+  led there:
   - *Lean 4 core* (no Mathlib). v4.35.0 is a 594 MB download, 3.0 GB unpacked (fine on disk), and
     ships `grind` (SMT-style), `omega` (linear integer arithmetic) and `bv_decide` (bit-vectors
     via the bundled CaDiCaL, i.e. 64-bit overflow). Proofs are checked by Lean's kernel, so they
