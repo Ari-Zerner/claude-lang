@@ -315,6 +315,13 @@ design and its decisions (D1...).
   within two fixes once core names were hinted, and names remain the single biggest cause of failed
   attempts.
 
+- 2026-11-08 (night 4, wrap-up): D24 (c) closed (big-trial rerun: sentinels 6 -> 2); hidden-input
+  trials against Python (`trials/hidden.py`, basic and rules sets: Haiku 171/171 in both languages,
+  so no wrong answers to separate them); D25 (`"{"` is a literal brace) after the bracket task tripped
+  on it; Lean-direct baseline (`trials/leanbase.py`, basic and hard sets): both models proved
+  everything within two fixes once core-vs-Mathlib names were hinted. The verification direction is
+  now a question for Ari (see Next step 1).
+
 ## Next step
 1. **Formal verification** (Ari, 2026-11-07: "we definitely want proofs, not just fuzzing"; see
    DESIGN.md open questions): contracts (`requires`/`ensures`), build-time counterexample search,
