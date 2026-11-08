@@ -308,12 +308,25 @@ def lex_string(line, i, n, lineno, d, toks):
                         lineno, i + 1, 2)
             i += 2
             continue
+        if c == "{" and line[i + 1:i + 2] == '"':
+            # D25: a `{` just before the closing quote can't start an interpolation (nothing follows
+            # it), so it's a literal brace: `"{"`, `"set {"`.
+            buf.append("{")
+            i += 1
+            continue
         if c == "{":
             close = line.find("}", i + 1)
             if close == -1 or close >= n:
-                d.error("unclosed-interpolation", "`{` starts an interpolation, but there's no `}`", lineno, i + 1,
-                        1, "write `\\{` for a literal brace")
-                i = n
+                # Probably a literal brace (`"{x"`) or a lost `}`. Say so once, keep the brace as text and
+                # go on lexing, so the string still ends at its own `"` (no second "unclosed string").
+                why = "but there's no `}`"
+                end = line.find('"', i + 1)
+                fix = "write `\\{` for a literal brace"
+                if end != -1:
+                    fix += f": `{line[start:i]}\\{{{line[i + 1:end + 1]}`"
+                d.error("unclosed-interpolation", f"`{{` starts an interpolation, {why}", lineno, i + 1, 1, fix)
+                buf.append("{")
+                i += 1
                 continue
             if buf:
                 parts.append(("text", "".join(buf)))

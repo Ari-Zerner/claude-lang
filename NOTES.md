@@ -242,6 +242,16 @@ design and its decisions (D1...).
   - Haiku got floor rounding right in claude-lang without `//` (sign-adjusted halves, overflow-safe
     too), with examples on the negative cases.
 
+- 2026-11-08 (night 4, step 3): **the `"{"` trap, fixed in the language (D25).** First the
+  diagnostic: an unclosed `{` now gets one error at the brace with the escaped string as the fix
+  (`"\{x"`), not also a false "no closing quote", and the lexer keeps going, so `c == "{" or c == "}"`
+  no longer reads as a nested string. A SPEC sentence ("a literal brace is always escaped") didn't
+  help: a Haiku rerun of `balanced` (`2026-11-08-1202-hidden-cl-haiku`) wrote `"{"` again, five
+  times. So D25: a `{` right before the closing quote is a literal brace (it can't start an
+  interpolation; nothing follows it), and the SPEC sentence is gone. Rerun
+  (`-1204-hidden-cl-haiku`): first try, 9/9 hidden. New test `err/braces.cl`, D25 cases in
+  `ok/strings.cl`; 27 tests.
+
 ## Next step
 1. **Formal verification** (Ari, 2026-11-07: "we definitely want proofs, not just fuzzing"; see
    DESIGN.md open questions): contracts (`requires`/`ensures`), build-time counterexample search,
@@ -258,7 +268,6 @@ design and its decisions (D1...).
      hasn't memorized** (a parking fee with a grace period and a daily cap, adding days to a date
      across leap years, a scoring game with unusual tie rules, a tax with brackets and rounding),
      so there are wrong answers to count, then Sonnet too. Allow Python doctests in that run.
-   - fix the `"{"` diagnostic first: one error at the brace, not `unclosed-string` too.
    - a **Lean-direct baseline**: the same verification tasks, Claude writing proved Lean.
 2. Maybe `join` / `contains` built-ins (both adventure programs wrote `contains` and a join again).
    `match` expressions and a `Map` wait for more than one model wanting them (see night 4, step 1).

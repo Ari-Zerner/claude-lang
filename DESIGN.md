@@ -264,6 +264,18 @@ Claude differs from a human programmer in ways that matter for language design:
     turning an enum into a name or picking a field per room), although SPEC's own example returns
     from each arm. One model's style, so `match` expressions stay open.
 
+- **D25. A `{` right before a string's closing quote is a literal brace.** (2026-11-08; built.)
+  `"{"`, `"set {"`. The hidden-input trial's `balanced` task wrote `"{"` five times in one
+  function (bracket tokens), and a rerun did it again after SPEC gained a sentence saying braces
+  must be escaped: interpolation by default (D18) makes every `{` special, and Claude's habit from
+  every other language is that `"{"` is just a brace. That position can't start an interpolation
+  (there is nothing after it), so there's only one reading, and accepting it adds no ambiguity.
+  Any other unclosed `{` (`"{x"`, likely a lost `}`) stays an error, now one per brace (it also
+  used to report a false "no closing quote"), with the escaped string as the fix
+  (`"\{x"`). `\{` still works everywhere; `print` shows braces escaped inside quoted strings
+  (`["\{", "\}"]`) so output reads back as code. SPEC doesn't mention the rule: code that relies
+  on it just works.
+
 ## Open questions
 
 - Memory management: value semantics with copy-on-write (D19); nothing is freed yet.

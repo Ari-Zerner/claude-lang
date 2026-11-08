@@ -15,4 +15,9 @@ fn main() uses io
   print("tab:\t|brace: \{x\}|quote: \"|bool: {3 > 2}|é ?? ok")
   let a = "x"
   print(a == "x" and "{a}{a}" != "x")
+  # D25: a `{` right before the closing quote is a literal brace
+  print("{")
+  print(["{", "}"])
+  print("{" == "\{")
+  print("{a}{")
 end fn main
