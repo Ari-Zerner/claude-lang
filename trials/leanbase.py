@@ -67,6 +67,45 @@ TASKS = [
                 ("parkingFee 1455", "20"), ("parkingFee 1456", "23"), ("parkingFee 3301", "60")]),
 ]
 
+# Where Lean-direct might break: a loop needing an invariant, an index-heavy algorithm, well-founded
+# recursion, a round trip. `must`/`forbid` are regexes over the model's code (e.g. a `for` loop really
+# is one; gcd doesn't just call Nat.gcd).
+HARD = [
+    dict(name="loop", sig="def sumSq (xs : List Nat) : Nat",
+         text="`sumSq xs` is the sum of the squares of the items. Write it imperatively: `Id.run do` with a "
+              "`let mut` accumulator and a `for x in xs do` loop.",
+         must=[r"\bfor\b", r"let\s+mut"],
+         thms=[("sumSq_spec", "∀ xs : List Nat, sumSq xs = (xs.map (fun x => x * x)).sum")],
+         evals=[("sumSq []", "0"), ("sumSq [1, 2, 3]", "14"), ("sumSq [5]", "25")]),
+    dict(name="bsearch", sig="def lowerBound (xs : Array Int) (x : Int) : Nat",
+         text="`xs` is sorted in ascending order. `lowerBound xs x` is the position of the first item that is "
+              "greater than or equal to x, or `xs.size` if there is none. Find it by binary search, halving "
+              "the range of candidate positions each step.",
+         thms=[("lowerBound_le", "∀ (xs : Array Int) (x : Int), lowerBound xs x ≤ xs.size"),
+               ("lowerBound_spec", "∀ (xs : Array Int) (x : Int), xs.toList.Pairwise (· ≤ ·) → "
+                "(∀ i (h : i < xs.size), i < lowerBound xs x → xs[i] < x) ∧ "
+                "(∀ i (h : i < xs.size), lowerBound xs x ≤ i → x ≤ xs[i])")],
+         evals=[("lowerBound #[1, 3, 3, 5] 3", "1"), ("lowerBound #[] 1", "0"), ("lowerBound #[1, 3, 3, 5] 6", "4"),
+                ("lowerBound #[1, 3, 3, 5] 0", "0"), ("lowerBound #[-4, -2, 0] (-3)", "1"),
+                ("lowerBound #[2, 2, 2] 2", "0")]),
+    dict(name="gcd", sig="def gcd' (a b : Nat) : Nat",
+         text="`gcd' a b` is the greatest common divisor of a and b, computed by Euclid's algorithm "
+              "(`gcd' a 0 = a`, otherwise `gcd' b (a % b)`). Don't use `Nat.gcd` or its lemmas.",
+         forbid=[r"Nat\.gcd"],
+         thms=[("gcd'_dvd", "∀ a b : Nat, gcd' a b ∣ a ∧ gcd' a b ∣ b"),
+               ("gcd'_greatest", "∀ a b d : Nat, d ∣ a → d ∣ b → d ∣ gcd' a b")],
+         evals=[("gcd' 12 18", "6"), ("gcd' 7 0", "7"), ("gcd' 0 7", "7"), ("gcd' 0 0", "0"),
+                ("gcd' 17 5", "1"), ("gcd' 100 75", "25")]),
+    dict(name="rle", sig="def encode (xs : List Int) : List (Int × Nat)\n    def decode (ps : List (Int × Nat)) : List Int",
+         text="`encode` run-length encodes a list: one (value, count) pair per maximal run of equal adjacent "
+              "items, in order. `decode` expands pairs back into a list.",
+         thms=[("decode_encode", "∀ xs : List Int, decode (encode xs) = xs"),
+               ("encode_counts_pos", "∀ xs : List Int, ∀ p ∈ encode xs, 0 < p.2")],
+         evals=[("encode [1, 1, 2]", "[(1, 2), (2, 1)]"), ("encode []", "[]"), ("decode [(3, 2)]", "[3, 3]"),
+                ("encode [5, 5, -1, 5]", "[(5, 2), (-1, 1), (5, 1)]")]),
+]
+SETS = {"basic": TASKS, "hard": HARD}
+
 PROMPT = """Write Lean 4 code (Lean 4.35, core library only: no Mathlib and no Batteries; `import Std` is
 available) that defines
 
@@ -160,6 +199,12 @@ def check(task, code, tmp):
                 problems.append(f"`{info}` depends on {sorted(axs - OK_AXIOMS)} (sorry, an axiom or native_decide)")
         elif kind == "eval" and data != info[1]:
             evals_bad.append(f"`{info[0]}` gave {data}, but should be {info[1]}")
+    for pat in task.get("must", []):
+        if not re.search(pat, code):
+            problems.append(f"the code must use `{pat}` (see the task)")
+    for pat in task.get("forbid", []):
+        if re.search(pat, code):
+            problems.append(f"the code must not use `{pat}` (see the task)")
     diags = "\n".join(model_errors + problems + evals_bad)
     if not msgs and r.returncode != 0:
         diags = (r.stderr or "lean failed")[-800:]
@@ -171,14 +216,15 @@ def check(task, code, tmp):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", default="haiku")
+    ap.add_argument("--set", choices=sorted(SETS), default="basic")
     ap.add_argument("--only", nargs="*")
     ap.add_argument("--rounds", type=int, default=2, help="fix rounds after the first try")
     ap.add_argument("--hints", action="store_true", help="add the core-vs-Mathlib name note to the prompt")
     args = ap.parse_args()
     stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d-%H%M")
-    out_path = os.path.join(HERE, "results", f"{stamp}-leanbase{'-hints' if args.hints else ''}-{args.model}.md")
+    out_path = os.path.join(HERE, "results", f"{stamp}-leanbase-{args.set}{'-hints' if args.hints else ''}-{args.model}.md")
     rows, log = [], [f"# Lean-direct baseline {stamp} ({args.model})\n"]
-    for task in TASKS:
+    for task in SETS[args.set]:
         if args.only and task["name"] not in args.only:
             continue
         thms = "\n".join(f"    theorem {n} : {s}" for n, s in task["thms"])
