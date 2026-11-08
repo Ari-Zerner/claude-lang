@@ -195,11 +195,32 @@ design and its decisions (D1...).
   ended before it. Night 3 in all: D23 (assignment through any path) and the trial rerun that it
   fixed, the `--set big` trial, D24 designed and parts (a) and (b) built. 26 tests pass.
 
+- 2026-11-08 (night 4, step 1): **D24 (c), the big-trial rerun** (`2026-11-08-1001-big-haiku`,
+  `-1002-big-sonnet`): **both 4/4 first try**, no compile errors at all. Against `2026-11-07`:
+  - **Sentinels: 6 functions -> 2; `Option` finds: 0 -> 4** (Haiku's `find_item`, `find_spend`,
+    `exit_to`; Sonnet's `move -> Option[Room]`). The two left: Haiku's league `indexOf` looks up
+    names that are always there (an `Option` would force a dead `case None`, and `-1` still traps if
+    wrong), and Sonnet's orders `indexOf` serves as both must-find and maybe-find via `if ni < 0`.
+  - **Unpack cost:** 1-2 lines more than `if ni < 0 / else / end if`; no unpacking mistakes.
+    So the one-line forms (`if let`, `value_or`) aren't wanted yet.
+  - **New pressure, `match` to a value:** Sonnet's adventure (3 enums: Room, Dir, Cmd) has four
+    functions shaped `var s = ""` / `match r` / `case Hall` / `s = "Hall"` ... / `return s`
+    (`roomName`, `dirName`, `itemsOf`, `setItems`; ~54 lines), though SPEC's own example returns
+    from each arm. `roomName` was also unneeded, since `print(Hall)` already prints `Hall`.
+    Haiku's adventure used Ints for rooms and one `Command` enum, and wrote none of these.
+  - **Missing map type:** Sonnet's `World` has one field per room (`hall`, `library`, ...) plus
+    `itemsOf`/`setItems` to pick one by enum; Haiku used `List[List[String]]` indexed by room Int.
+    Adventure grew 123 -> 192 lines for Sonnet. Pressure for `Map[K, V]` or enum-indexed lists.
+  - **Fragile-but-correct:** Sonnet's league again hand-translated team names to indexes, and
+    sorted on a packed key, `pts * 10000 + (gd + 100) * 100 + gf`: right here, wrong once a team
+    scores 100 goals. That's the "right on the given input, wrong on others" bug the
+    wrong-but-runs trial should look for, and the kind of thing a contract would catch.
+  - Line counts swing more between runs than between language versions (Haiku orders 51 -> 70
+    because it added structs; Sonnet's 62 -> 52 with parallel lists), so per-feature line savings
+    need the same program written twice, not two fresh runs.
+
 ## Next step
-1. **Finish D24 (c):** rerun `--set big` (both models) and compare with
-   `2026-11-07-1102`/`-1104`: how many sentinels remain, whether find functions return
-   `Option`, how many lines each unpack costs, and any new mistakes.
-2. **Formal verification** (Ari, 2026-11-07: "we definitely want proofs, not just fuzzing"; see
+1. **Formal verification** (Ari, 2026-11-07: "we definitely want proofs, not just fuzzing"; see
    DESIGN.md open questions): contracts (`requires`/`ensures`), build-time counterexample search,
    then proofs. Lean 4 core is the likely backend: Ari OK'd it, it's installed at
    `/root/.local/share/lean/lean-4.35.0-linux/bin/lean` (CACHEDIR.TAG keeps it out of the off-site
@@ -212,9 +233,13 @@ design and its decisions (D1...).
    - a **wrong-but-runs trial in claude-lang and Python** on the same tasks: count programs that
      run and print a wrong answer, and bugs that are silent in Python but stop in claude-lang
      (`xs[-1]` from a `-1` "not found", aliasing a list, `//` on negatives). First-try success on
-     small tasks can't separate the two; this can.
+     small tasks can't separate the two; this can. Likely shape: each task is a function graded
+     on hidden inputs (edge cases, larger values) beyond the one shown, so a packed sort key or an
+     off-by-one shows up as a wrong answer instead of passing.
    - a **Lean-direct baseline**: the same verification tasks, Claude writing proved Lean.
-3. Maybe `join` / `contains` built-ins. Then a wrong-but-compiles trial, holes (D9), the
+2. Maybe `join` / `contains` built-ins (both adventure programs wrote `contains` and a join again).
+   `match` expressions and a `Map` wait for more than one model wanting them (see night 4, step 1).
+3. Then a wrong-but-compiles trial, holes (D9), the
    formatter (D12). `parse_int(s) -> Result[Int, String]` is now possible (Result exists).
 4. Small cleanups seen in part (b): the `if let` cascade (bound name undefined) and the extra
    `not-bool` after `if i is None`.

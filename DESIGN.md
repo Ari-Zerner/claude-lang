@@ -254,6 +254,15 @@ Claude differs from a human programmer in ways that matter for language design:
     but hides control flow), and literal patterns (`case "go"`, `case 0`) for Int and String.
     Plan: build enums and `match`, then `Option`/`Result`, then rerun the big trial and count
     sentinels and the lines each unpack costs.
+  - *Trial result (2026-11-08, `--set big` rerun):* both models 4/4 first try, no compile errors.
+    Sentinel functions went from 6 to 2 and `Option` find functions from 0 to 4. Of the two left,
+    one is a lookup that can't miss (names known to be in the list, where `-1` still traps if
+    wrong); the other is Sonnet's `indexOf` doing double duty as a must-find and a maybe-find
+    (`if ni < 0`). An unpack costs 1-2 lines more than `if i < 0 ... else`, and no one got one
+    wrong. None of the one-line forms is needed yet. The new pressure is **`match` to a value**:
+    Sonnet wrote four `var s = ...` / `match` / `s = ...` arms / `return s` functions (~54 lines,
+    turning an enum into a name or picking a field per room), although SPEC's own example returns
+    from each arm. One model's style, so `match` expressions stay open.
 
 ## Open questions
 
