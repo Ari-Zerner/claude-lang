@@ -301,6 +301,20 @@ design and its decisions (D1...).
     line). A thought for Ari: compile claude-lang to Lean rather than C, so the program that runs is
     the one that's proved.
 
+- 2026-11-08 (night 4, step 6): **hard Lean tasks, where Lean-direct might break** (`--set hard
+  --hints`; `2026-11-08-1501-leanbase-hard-hints-haiku`, `-1506-...-sonnet`): a `for` loop with
+  `let mut` proved equal to a `map`/`sum` spec, binary search's lower-bound property on an `Array`
+  (statement with `xs[i]` bounds proofs), Euclid's gcd (`Nat.gcd` forbidden, so well-founded
+  recursion and divisibility by hand), and run-length encode/decode round trip. `must`/`forbid`
+  regexes keep the loop a loop. **All 8 proved:** Haiku loop 2 fixes, bsearch 2 fixes, gcd 1, rle
+  first try; Sonnet loop 1 fix, **bsearch first try (86 lines)**, gcd 1, rle first try. Both binary
+  searches really halve (`termination_by hi - lo`). Neither model used `mvcgen`/`vcgen`: both proved
+  the loop by induction on a generalized accumulator, with `simp` unfolding the `for`. **Half the
+  fix rounds (3 of 6) were again Mathlib names not in the note** (`Dvd.dvd.mul_right`, twice;
+  `not_lt.mp`); the rest were ordinary unsolved goals. So across 20 task runs, everything proved
+  within two fixes once core names were hinted, and names remain the single biggest cause of failed
+  attempts.
+
 ## Next step
 1. **Formal verification** (Ari, 2026-11-07: "we definitely want proofs, not just fuzzing"; see
    DESIGN.md open questions): contracts (`requires`/`ensures`), build-time counterexample search,
@@ -322,7 +336,10 @@ design and its decisions (D1...).
      proved all six tasks. Next for verification: decide with Ari whether claude-lang's proofs
      should target Lean (compile claude-lang to Lean, or emit Lean obligations from
      `requires`/`ensures` and let `omega`/`grind` close them), given that Lean-direct works this well.
-     Harder Lean tasks (a loop with an invariant, binary search) would show where Lean-direct breaks.
+     Harder tasks didn't break it (night 4, step 6: loop invariant, binary search, gcd, RLE all
+     proved). The open question is now mostly Ari's: what claude-lang's proofs should add, given
+     that. Candidates: a much better error layer over Lean (name fixes, the goal in claude-lang
+     terms), or compiling claude-lang to Lean so contracts are proved about the code that runs.
    - a **change trial** (modify an existing program) is still the best place left for exhaustive
      `match` to show, if it shows anywhere (see night 4, step 4).
 2. Maybe `join` / `contains` built-ins (both adventure programs wrote `contains` and a join again).
