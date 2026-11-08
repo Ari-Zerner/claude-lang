@@ -252,6 +252,27 @@ design and its decisions (D1...).
   (`-1204-hidden-cl-haiku`): first try, 9/9 hidden. New test `err/braces.cl`, D25 cases in
   `ok/strings.cl`; 27 tests.
 
+- 2026-11-08 (night 4, step 4): **rule-dense hidden-input trial** (`--set rules`: parking fee with a
+  grace period and a daily cap, adding days across leap years, tax brackets rounded per part,
+  ranking with two tie rules, a darts bust rule, an elevator sweep, an instant-runoff count with
+  tie-breaking, greedy change from a limited supply; 77 hidden inputs, mostly on rule boundaries).
+  Python may now write doctests, which run before the shown example like a build step (failures go
+  back for the one fix). `2026-11-08-1303-hidden-rules-cl-haiku`, `-1306-hidden-rules-py-haiku`:
+  **Haiku 77/77 in both languages again.** Findings:
+  - **Every fix round (3, across both languages) was a wrong test, not wrong code:** a claude-lang
+    `example` claiming 146097 days before 1-1-1 is 1-1-1; Python doctests expecting candidate 0 where
+    2 holds the only counting ballot, and `[1, 1, 0, 0]` (35) as change for 40. Each time the model
+    fixed the test and kept the right code. The model's own wrong expectation is a real cost of
+    self-checks, and the risk is a model "fixing" right code to match a wrong test.
+  - **With doctests allowed, Python wrote as many checks as claude-lang** (85 doctests vs 93
+    examples). So the step-2 gap in examples was the prompt, not the language.
+  - **Conclusion so far:** single functions of up to ~90 lines with clear rules give Haiku no bugs to
+    catch in either language, so claude-lang's run-time traps, exhaustive `match` and value semantics
+    have nothing to stop at this scale. If they pay, it's at a scale or in a kind of work these trials
+    don't reach. The best candidate is **changing an existing program** (add an enum variant, a rule,
+    a field): exhaustive `match` points at every place a new variant must be handled, where a Python
+    `if`/`elif` chain falls through silently, and the hidden inputs become regression tests.
+
 ## Next step
 1. **Formal verification** (Ari, 2026-11-07: "we definitely want proofs, not just fuzzing"; see
    DESIGN.md open questions): contracts (`requires`/`ensures`), build-time counterexample search,
@@ -263,11 +284,12 @@ design and its decisions (D1...).
    Ari's sanity check (2026-11-07): "is this buying Claude anything over just writing in Lean
    directly?" and "I expect models to get things right in Python as well. Does that undermine
    the whole project? Maybe, but it's just for fun." So, before building the verifier:
-   - the **wrong-but-runs trial** (`trials/hidden.py`) is built; the first task set was too
-     familiar (Haiku 94/94 in both languages, night 4 step 2). Next: **rule-dense tasks a model
-     hasn't memorized** (a parking fee with a grace period and a daily cap, adding days to a date
-     across leap years, a scoring game with unusual tie rules, a tax with brackets and rounding),
-     so there are wrong answers to count, then Sonnet too. Allow Python doctests in that run.
+   - the **wrong-but-runs trial** (`trials/hidden.py`, `--set basic|rules`) found no wrong answers in
+     either language (Haiku 171/171, night 4 steps 2 and 4). Next: a **change trial**: give the model
+     a working ~100-line program in each language (e.g. the adventure game, or orders) and a change
+     request (a new command or enum variant, a new pricing rule), then grade on hidden regression
+     inputs plus the new behaviour. That's where exhaustive `match` and value semantics should matter,
+     if anywhere. Sonnet only once a set separates anything.
    - a **Lean-direct baseline**: the same verification tasks, Claude writing proved Lean.
 2. Maybe `join` / `contains` built-ins (both adventure programs wrote `contains` and a join again).
    `match` expressions and a `Map` wait for more than one model wanting them (see night 4, step 1).

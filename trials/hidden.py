@@ -199,6 +199,179 @@ TASKS = [
 ]
 
 
+# Rule-dense tasks a model hasn't seen solved a thousand times: every rule matters, and the hidden
+# inputs sit on the boundaries between rules.
+def r_parking_fee(minutes):
+    def part(m):
+        return 0 if m <= 15 else min(20, 3 * -(-m // 60))
+    return 20 * (minutes // 1440) + part(minutes % 1440)
+
+
+def r_add_days(year, month, day, days):
+    import datetime as dt
+    d = dt.date(year, month, day) + dt.timedelta(days=days)
+    return [d.year, d.month, d.day]
+
+
+def r_tax(income):
+    t, prev = 0, 0
+    for cap, rate in ((10000, 0), (40000, 10), (100000, 25), (None, 40)):
+        top = income if cap is None else min(income, cap)
+        t += max(0, top - prev) * rate // 100
+        if cap is None or income <= cap:
+            break
+        prev = cap
+    return max(0, t - 500)
+
+
+def r_rank(scores, attempts):
+    return sorted(range(len(scores)), key=lambda i: (-scores[i], attempts[i], i))
+
+
+def r_darts(start, throws):
+    score = start
+    for t in range(0, len(throws), 3):
+        turn_start = score
+        for x in throws[t:t + 3]:
+            if score - x < 0 or score - x == 1:
+                score = turn_start
+                break
+            score -= x
+            if score == 0:
+                return 0
+    return score
+
+
+def r_elevator(start, requests):
+    s = set(requests)
+    return ([start] if start in s else []) + sorted(f for f in s if f > start) + \
+        sorted((f for f in s if f < start), reverse=True)
+
+
+def r_runoff(candidates, ballots):
+    left = set(range(candidates))
+    while len(left) > 1:
+        counts, total = {k: 0 for k in left}, 0
+        for b in ballots:
+            top = next((x for x in b if x in left), None)
+            if top is not None:
+                counts[top] += 1
+                total += 1
+        for k in left:
+            if counts[k] * 2 > total:
+                return k
+        low = min(counts.values())
+        left.remove(max(k for k in left if counts[k] == low))
+    return min(left)
+
+
+def r_vending(amount, coins):
+    used, rest = [], amount
+    for value, have in zip((25, 10, 5, 1), coins):
+        k = min(have, rest // value)
+        used.append(k)
+        rest -= k * value
+    return used if rest == 0 else None
+
+
+RULES = [
+    dict(name="parking_fee", params=[("minutes", "Int")], ret="Int", ref=r_parking_fee,
+         text="A car park charges for a stay of `minutes` minutes (0 or more). A stay of 15 minutes or less is "
+              "free. Otherwise the charge is 3 for each hour or part of an hour, counted from the start of the "
+              "stay, but never more than 20. A stay of a day (1440 minutes) or longer pays 20 for each complete "
+              "day, and what is left after the complete days is charged by the rules above as if it were a "
+              "stay of its own (so a remainder of 15 minutes or less is free).",
+         shown=dict(minutes=100),
+         hidden=[dict(minutes=0), dict(minutes=15), dict(minutes=16), dict(minutes=60), dict(minutes=61),
+                 dict(minutes=360), dict(minutes=361), dict(minutes=1439), dict(minutes=1440),
+                 dict(minutes=1455), dict(minutes=1456), dict(minutes=1500), dict(minutes=3301)]),
+    dict(name="add_days", params=[("year", "Int"), ("month", "Int"), ("day", "Int"), ("days", "Int")],
+         ret=L, ref=r_add_days,
+         text="Given a valid date in the Gregorian calendar (year from 1 to 9000, month 1-12, day of the month "
+              "from 1) and a number of days, which may be negative, return the date that many days later as "
+              "[year, month, day]. Leap years are those divisible by 4, except years divisible by 100, which "
+              "are leap years only if also divisible by 400.",
+         shown=dict(year=2024, month=2, day=28, days=2),
+         hidden=[dict(year=2023, month=2, day=28, days=1), dict(year=2024, month=2, day=28, days=1),
+                 dict(year=1900, month=2, day=28, days=1), dict(year=2000, month=2, day=28, days=1),
+                 dict(year=2024, month=1, day=1, days=-1), dict(year=2100, month=3, day=1, days=-1),
+                 dict(year=2024, month=3, day=15, days=0), dict(year=2023, month=12, day=31, days=366),
+                 dict(year=2020, month=5, day=31, days=1000), dict(year=2000, month=3, day=1, days=-1000),
+                 dict(year=2024, month=2, day=29, days=365)]),
+    dict(name="tax", params=[("income", "Int")], ret="Int", ref=r_tax,
+         text="Compute the tax on an income (0 or more). The part of the income up to 10000 is taxed at 0%; "
+              "the part above 10000, up to 40000, at 10%; the part above 40000, up to 100000, at 25%; and the "
+              "part above 100000 at 40%. Each part's tax is rounded down to a whole number on its own, and "
+              "then the parts are added. Finally a credit of 500 is subtracted, but the tax is never below 0.",
+         shown=dict(income=50000),
+         hidden=[dict(income=0), dict(income=10000), dict(income=15000), dict(income=15010),
+                 dict(income=10009), dict(income=40000), dict(income=40003), dict(income=40004),
+                 dict(income=100000), dict(income=100003), dict(income=250000)]),
+    dict(name="rank", params=[("scores", L), ("attempts", L)], ret=L, ref=r_rank,
+         text="Player i scored scores[i] points using attempts[i] attempts (the two lists have the same "
+              "length). Return the players' indexes in ranking order: more points first; on equal points, "
+              "fewer attempts first; if both are equal, the lower index first.",
+         shown=dict(scores=[3, 5, 5, 1], attempts=[2, 3, 1, 0]),
+         hidden=[dict(scores=[], attempts=[]), dict(scores=[7], attempts=[1]),
+                 dict(scores=[5, 5, 5], attempts=[1, 1, 1]), dict(scores=[2, 2, 2, 2], attempts=[3, 1, 3, 1]),
+                 dict(scores=[4, 4, 4, 4, 4], attempts=[5, 4, 3, 2, 1]),
+                 dict(scores=[1, 3, 2, 3, 1, 2], attempts=[0, 2, 2, 2, 0, 1]),
+                 dict(scores=[-1, 0, -1], attempts=[1, 1, 0]),
+                 dict(scores=[9, 1, 9, 1, 9], attempts=[2, 2, 2, 2, 2])]),
+    dict(name="darts", params=[("start", "Int"), ("throws", L)], ret="Int", ref=r_darts,
+         text="A darts game starts with `start` points (2 or more). The throws come in turns of three: throws "
+              "1-3 are the first turn, 4-6 the second, and so on (the last turn may be shorter). Each throw's "
+              "points (0 or more) are subtracted from the score. If a throw would leave the score below 0 or "
+              "at exactly 1, it's a bust: the score goes back to what it was at the start of that turn, and "
+              "the rest of that turn's throws are skipped. When the score reaches exactly 0 the game is over "
+              "and any later throws are ignored. Return the final score.",
+         shown=dict(start=50, throws=[20, 20, 5, 3, 1, 1]),
+         hidden=[dict(start=101, throws=[]), dict(start=40, throws=[20, 20]), dict(start=40, throws=[20, 20, 5]),
+                 dict(start=40, throws=[30, 15, 5, 10]), dict(start=10, throws=[9]),
+                 dict(start=10, throws=[5, 3, 4, 2]), dict(start=3, throws=[1, 1, 1]),
+                 dict(start=100, throws=[60, 60, 0, 50, 50]), dict(start=7, throws=[3, 3, 3, 2, 2, 2, 2])]),
+    dict(name="elevator", params=[("start", "Int"), ("requests", L)], ret=L, ref=r_elevator,
+         text="An elevator is at floor `start` and must visit every requested floor (floors may be negative; "
+              "a floor may be requested more than once but is visited once). If the starting floor is "
+              "requested, it is visited first, before moving. Then the elevator goes up, stopping at each "
+              "requested floor on the way, until no requested floor is left above it; then it goes down, "
+              "stopping at the remaining requested floors. Return the floors in the order they are visited.",
+         shown=dict(start=5, requests=[7, 2, 9, 3]),
+         hidden=[dict(start=5, requests=[]), dict(start=5, requests=[5]), dict(start=5, requests=[1, 2]),
+                 dict(start=5, requests=[6, 6, 6]), dict(start=0, requests=[-2, 3, -1, 5]),
+                 dict(start=5, requests=[5, 4, 6, 5]), dict(start=3, requests=[1, 2, 3, 4, 5]),
+                 dict(start=10, requests=[9, 11, 10, 8, 12])]),
+    dict(name="runoff", params=[("candidates", "Int"), ("ballots", LL)], ret="Int", ref=r_runoff,
+         text="Candidates are numbered from 0 to candidates - 1 (there is at least one). Each ballot lists "
+              "candidate numbers in order of preference; it may list only some candidates (or none) and never "
+              "lists one twice. Count in rounds. If only one candidate is left in the race, that candidate "
+              "wins. Otherwise every ballot counts for its highest-ranked candidate still in the race; a "
+              "ballot with none left counts for nobody. If a candidate has more than half of the ballots that "
+              "count this round, that candidate wins. Otherwise the candidate with the fewest votes this round "
+              "is removed from the race (a candidate with no votes has 0); if several are tied for fewest, "
+              "the one with the highest number is removed. Then the next round starts. Return the winner.",
+         shown=dict(candidates=3, ballots=[[0, 1], [1], [2, 1], [0], [1, 0]]),
+         hidden=[dict(candidates=1, ballots=[]), dict(candidates=2, ballots=[]),
+                 dict(candidates=3, ballots=[[2], [2], [1]]), dict(candidates=3, ballots=[[0], [1], [2]]),
+                 dict(candidates=4, ballots=[[3, 0], [3, 0], [1, 0], [2, 1]]),
+                 dict(candidates=2, ballots=[[1], [1], [0], [0]]),
+                 dict(candidates=3, ballots=[[1, 2], [2, 1], [0]]), dict(candidates=3, ballots=[[], [], [0]])]),
+    dict(name="vending", params=[("amount", "Int"), ("coins", L)], ret="Option[List[Int]]", ref=r_vending,
+         text="A machine gives `amount` (0 or more) in change, using coins worth 25, 10, 5 and 1. `coins` has "
+              "four items: how many coins of each value the machine holds, in that order. It uses as many 25s "
+              "as it can without going over the amount or its supply, then as many 10s, then 5s, then 1s. If "
+              "that leaves part of the amount unpaid, return none (even if some other mix of coins would have "
+              "worked). Otherwise return how many coins of each value it used, in the same order.",
+         shown=dict(amount=67, coins=[2, 1, 3, 10]),
+         hidden=[dict(amount=0, coins=[0, 0, 0, 0]), dict(amount=30, coins=[1, 0, 0, 4]),
+                 dict(amount=30, coins=[0, 3, 0, 0]), dict(amount=30, coins=[1, 0, 1, 0]),
+                 dict(amount=99, coins=[3, 2, 1, 4]), dict(amount=100, coins=[10, 10, 10, 10]),
+                 dict(amount=40, coins=[1, 1, 0, 4]), dict(amount=6, coins=[0, 0, 0, 5]),
+                 dict(amount=6, coins=[0, 0, 1, 1])]),
+]
+SETS = {"basic": TASKS, "rules": RULES}
+
+
 # ---- formatting -------------------------------------------------------------------------------
 def inner(t):
     return t[t.index("[") + 1:-1]
@@ -323,7 +496,8 @@ You wrote:
 Reply with only the corrected code, in one ```{fence} code block."""
 EXTRA = {"cl": "Don't write `fn main`. ",
          "py": "Use only the standard library, and write no top-level code other than definitions "
-               "(no tests, no `if __name__` block). "}
+               "(no `if __name__` block). You may put doctests in docstrings: they are run before the "
+               "example, and failures are sent back to you. "}
 
 
 def extract(reply, fence):
@@ -347,8 +521,10 @@ def run(cmd, cwd, timeout=10):
     return p.returncode, out, err.replace(cwd + "/", "")
 
 
-def execute(lang, task, code, args, tmp):
-    """(status, output, stderr) for one call: status is 'built-fail' for a claude-lang build error."""
+def execute(lang, task, code, args, tmp, doctests=False):
+    """(status, output, stderr) for one call. Status 'build-fail' is a claude-lang build error (its
+    `example` lines included) or, with doctests=True, a failing Python doctest: each language's own
+    check before the code is used."""
     if lang == "cl":
         src = code + f"\nfn main() uses io\n  print({call_cl(task, args)})\nend fn main\n"
         with open(os.path.join(tmp, "prog.cl"), "w") as fh:
@@ -360,10 +536,14 @@ def execute(lang, task, code, args, tmp):
     else:
         with open(os.path.join(tmp, "sol.py"), "w") as fh:
             fh.write(code)
+        if doctests:
+            rc, out, err = run([sys.executable, "-B", "-m", "doctest", "sol.py"], tmp)
+            if rc != 0:
+                return "build-fail", "", "\n".join((out + err).replace(tmp + "/", "").strip().splitlines()[-40:])
         with open(os.path.join(tmp, "runner.py"), "w") as fh:
             fh.write(FMT_SRC + f"\nfrom sol import {task['name']}\n"
                      f"print(fmt({call_py(task, args)}, {task['ret']!r}))\n")
-        rc, out, err = run([sys.executable, "runner.py"], tmp)
+        rc, out, err = run([sys.executable, "-B", "runner.py"], tmp)
         err = "\n".join(err.strip().splitlines()[-6:])
     return ("ran" if rc == 0 else "error"), out, err
 
@@ -372,7 +552,7 @@ def selftest():
     """Every expected value, written as a claude-lang literal and printed, must read back as fmt() says."""
     bad = 0
     with tempfile.TemporaryDirectory() as tmp:
-        for task in TASKS:
+        for task in TASKS + RULES:
             lines = []
             for args in [task["shown"]] + task["hidden"]:
                 v = task["ref"](**json.loads(json.dumps(args)))
@@ -395,6 +575,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--lang", choices=["cl", "py"])
     ap.add_argument("--model", default="haiku")
+    ap.add_argument("--set", choices=sorted(SETS), default="basic")
     ap.add_argument("--only", nargs="*")
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args()
@@ -403,10 +584,10 @@ def main():
     spec = open(os.path.join(ROOT, "SPEC.md")).read()
     lang, fence = args.lang, {"cl": "cl", "py": "python"}[args.lang]
     stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d-%H%M")
-    out_path = os.path.join(HERE, "results", f"{stamp}-hidden-{lang}-{args.model}.md")
-    rows, log = [], [f"# Hidden-input trial {stamp} ({lang}, {args.model})\n"]
+    out_path = os.path.join(HERE, "results", f"{stamp}-hidden-{args.set}-{lang}-{args.model}.md")
+    rows, log = [], [f"# Hidden-input trial {stamp} ({args.set} tasks, {lang}, {args.model})\n"]
     totals = dict(ok=0, wrong=0, error=0)
-    for task in TASKS:
+    for task in SETS[args.set]:
         if args.only and task["name"] not in args.only:
             continue
         sig, call = (sig_cl(task), call_cl) if lang == "cl" else (sig_py(task), call_py)
@@ -419,7 +600,7 @@ def main():
             code = extract(claude(prompt, args.model), fence)
             fixed = False
             for n in (1, 2):
-                status, out, err = execute(lang, task, code, task["shown"], tmp)
+                status, out, err = execute(lang, task, code, task["shown"], tmp, doctests=True)
                 good = status == "ran" and out == want(task, task["shown"]) + "\n"
                 log.append(f"### attempt {n}: {'shown example OK' if good else status}\n\n```{fence}\n{code}```\n")
                 if good or n == 2:
@@ -427,7 +608,8 @@ def main():
                 diags = err.strip() if status != "ran" else \
                     f"(it printed:\n{out.strip()}\ninstead of:\n{want(task, task['shown'])})"
                 log.append(f"Diagnostics sent back:\n```\n{diags}\n```\n")
-                what = "The compiler said:" if status == "build-fail" else "Running the example gave:"
+                what = ("The compiler said:" if lang == "cl" else "Running its doctests gave:") \
+                    if status == "build-fail" else "Running the example gave:"
                 code = extract(claude(FIX.format(prompt=prompt, fence=fence, code=code, what=what, diags=diags),
                                       args.model), fence)
                 fixed = True
@@ -446,7 +628,7 @@ def main():
                         notes.append(f"- {kind}: `{call(task, hargs)}` gave `{got}`, want `{w}`")
             for k in totals:
                 totals[k] += counts[k]
-        examples = len(re.findall(r"^\s*example ", code, re.M)) if lang == "cl" else 0
+        examples = len(re.findall(r"^\s*example " if lang == "cl" else r"^\s*>>> ", code, re.M))
         size = sum(1 for l in code.splitlines() if l.strip() and not l.strip().startswith("#"))
         verdict = "all ok" if counts["ok"] == len(task["hidden"]) else \
             ("WRONG" if counts["wrong"] else "stopped")
