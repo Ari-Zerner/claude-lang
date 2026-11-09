@@ -397,6 +397,21 @@ design and its decisions (D1...).
   nothing unsupported. **But Lean took 1618 s in total vs C's 68 s: median 12.7 s per program** (min 5.5 s;
   niced, on a swapping box) against ~0.5 s.
 
+- 2026-11-09 (night 5, step 5): **where a Lean build's time goes, and two cuts.** Measured on the adventure
+  program (205 lines) and `tests/ok/enums.cl`: elaboration (`lean -c`) ~2-4.6 s wall but **~1.5 s CPU**, with
+  a 477 MB peak RSS that's mostly Init's ~95 MB of memory-mapped `.olean` files; C compile at `-O1` ~1.3-2.7 s
+  (`-O0` saves ~1 s but runs 2.5x slower, so not worth it); **static link 3.5-4.3 s**, because `leanc` links the
+  whole Lean compiler library (`libLean`, `libleancpp`) and garbage-collects it. Cuts made in `clc.py`:
+  `run` links against Lean's shared runtime (`libleanshared.so` plus `libInit_shared.so`; ~0.6 s, a 58 KB
+  binary, same speed once running, +10-15 ms start-up), and `test` skips C entirely (examples need only
+  elaboration): **test ~1.8 s, run ~7.5 s**, down from 10-14 s. `build` stays static so its binary works
+  without Lean installed. **What's left is mostly this box:** with ~80 MB free, the mapped `.olean` files
+  and the 221 MB shared runtime are re-read from disk on most builds, so wall time is 2-3x CPU time (enums:
+  4.6 s wall vs 1.5 s CPU in `lean`, 1.2 s vs 0.5 s in the link). Elsewhere a Lean build would be ~3 s of CPU.
+  The 400 MB cap isn't the cause (capped and uncapped measured the same). The prelude is 86 KB of every
+  program's ~180-210 KB of generated C, so compiling it once into a cached module would save ~40% of the C
+  compile and its elaboration: worth doing, but small next to the I/O. The Lean test suite takes ~150 s (C: 8 s).
+
 ## Next step
 1. **Formal verification** (Ari, 2026-11-07: "we definitely want proofs, not just fuzzing"; see
    DESIGN.md open questions): contracts (`requires`/`ensures`), build-time counterexample search,
@@ -417,13 +432,14 @@ design and its decisions (D1...).
    - the **Lean-direct baseline** is done (night 4, steps 5-6), and **D26 decides the direction: compile
      claude-lang to Lean 4.** Stage 1 is done (night 5, step 1: `cl_lean.py`, `--backend lean`).
      Stage 2 is done too (night 5, steps 2-4: lists, structs, enums, Option/Result, match). **Next: stage 3,
-     Lean becomes the default.** The trial programs agree (127/127, night 5 step 4), so what's left is **build
-     time: median 12.7 s per program on Lean vs ~0.5 s on C**, and trials compile a lot. First measure where it
-     goes (`lean` elaboration incl. the prelude, `-c`, `leanc` compile, link). Ideas: compile the prelude once
-     into an `.olean` and `import` it; link against `libleanshared` instead of the static runtime; `leanc -O0`
-     for `test`/`run` of small programs; skip `-c` and `leanc` entirely for `test` (examples only need
-     elaboration). Decide whether C stays as a fast `--backend c` for the trial harnesses. Then stage 4,
-     contracts.
+     Lean becomes the default.** The trial programs agree (127/127, night 5 step 4), and build time is
+     measured and cut (step 5: test ~1.8 s, run ~7.5 s on this box, mostly paging). Make `--backend lean` the
+     default (and `tests/run.py` run Lean by default), keeping `--backend c` for the trial harnesses' fast loops
+     for now rather than retiring it at once. Optional: a precompiled prelude module (saves ~40% of the C
+     compile). **Then stage 4, contracts**, the point of D26: `requires`/`ensures` checked at run time first,
+     then proved by the automation (`omega`, `simp`, `decide`, `grind`), with goals reported at claude-lang lines.
+     Recursive functions are `partial def` today, which can't be proved about; stage 4 needs real `def`s with
+     termination (`termination_by`/`decreasing_by`, or structural recursion where Lean finds it).
    - a **change trial** (modify an existing program) is still the best place left for exhaustive
      `match` to show, if it shows anywhere (see night 4, step 4).
 2. Maybe `join` / `contains` built-ins (both adventure programs wrote `contains` and a join again).

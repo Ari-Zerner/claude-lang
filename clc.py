@@ -3006,7 +3006,9 @@ def lean_main(args, d, fns, structs):
         if args.emit_lean:
             shutil.copy(lfile, exe + ".lean")
         try:
-            r = subprocess.run([lean, "-c", cfile, lfile], capture_output=True, text=True, timeout=120, cwd=tmp)
+            # `test` needs only elaboration, which runs the examples; the C is for building a binary.
+            cmd = [lean, lfile] if args.command == "test" else [lean, "-c", cfile, lfile]
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=120, cwd=tmp)
             out, err, code, timed_out = r.stdout, r.stderr, r.returncode, False
         except subprocess.TimeoutExpired as te:
             out = te.stdout.decode() if isinstance(te.stdout, bytes) else (te.stdout or "")
@@ -3020,7 +3022,17 @@ def lean_main(args, d, fns, structs):
             return 2
         example_diags(out, err, timed_out, em, d)
         if not d.has_errors() and args.command in ("build", "run"):
-            r = subprocess.run([leanc, cfile, "-O1", "-o", exe], capture_output=True, text=True)
+            r = None
+            if args.command == "run":
+                # A throwaway binary links against Lean's shared runtime: ~0.6 s instead of ~4 s for the static
+                # link, which pulls in the whole Lean compiler library and garbage-collects it. Same speed once
+                # running (+~10 ms start-up). `build` stays static, so its binary works without Lean installed.
+                lib = os.path.join(os.path.dirname(leanc), "..", "lib", "lean")
+                r = subprocess.run([leanc, cfile, "-O1", "-o", exe, "-nodefaultlibs", "-L" + lib, "-lInit_shared",
+                                    "-lleanshared", "-lleanshared_1", "-lleanshared_2", "-Wl,-rpath," + lib, "-lc",
+                                    "-lm", "-lpthread", "-ldl"], capture_output=True, text=True)
+            if r is None or r.returncode != 0:  # building, or no shared runtime in this Lean: link statically
+                r = subprocess.run([leanc, cfile, "-O1", "-o", exe], capture_output=True, text=True)
             if r.returncode != 0:
                 keep_tmp = True
                 print(f"clc: internal error: leanc failed (this is a compiler bug). C kept at {cfile}\n"
