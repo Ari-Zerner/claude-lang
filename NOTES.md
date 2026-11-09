@@ -391,6 +391,11 @@ design and its decisions (D1...).
   Then the **io-lifting gap is fixed**: an io call on the right of `and`/`or` now sits under an `if` with an inner
   `do`, so it runs only when evaluated. Probe first: Lean already places `else if` and `while` condition actions
   correctly, so only `and`/`or` needed it. `tests/ok/io-order.cl` pins all three on both backends.
+  **Corpus check** (`trials/backends.py`, report `trials/results/2026-11-09-1336-backends.md`): of the 165
+  distinct claude-lang programs in the trial results, the current front end accepts 127, and **all 127 behave
+  identically on both backends** (exit code, stdout and stderr; 126 clean runs and one failing example), with
+  nothing unsupported. **But Lean took 1618 s in total vs C's 68 s: median 12.7 s per program** (min 5.5 s;
+  niced, on a swapping box) against ~0.5 s.
 
 ## Next step
 1. **Formal verification** (Ari, 2026-11-07: "we definitely want proofs, not just fuzzing"; see
@@ -412,10 +417,13 @@ design and its decisions (D1...).
    - the **Lean-direct baseline** is done (night 4, steps 5-6), and **D26 decides the direction: compile
      claude-lang to Lean 4.** Stage 1 is done (night 5, step 1: `cl_lean.py`, `--backend lean`).
      Stage 2 is done too (night 5, steps 2-4: lists, structs, enums, Option/Result, match). **Next: stage 3,
-     Lean becomes the default** once `trials/backends.py` shows the trial programs agree (fix what differs),
-     and the build time is looked at (Lean ~9 s vs C ~0.2 s per
-     program: trials compile a lot; consider `lean` without `-c` for `test`, and whether C stays as a fast
-     `--backend c` for the trial harnesses). Then stage 4, contracts.
+     Lean becomes the default.** The trial programs agree (127/127, night 5 step 4), so what's left is **build
+     time: median 12.7 s per program on Lean vs ~0.5 s on C**, and trials compile a lot. First measure where it
+     goes (`lean` elaboration incl. the prelude, `-c`, `leanc` compile, link). Ideas: compile the prelude once
+     into an `.olean` and `import` it; link against `libleanshared` instead of the static runtime; `leanc -O0`
+     for `test`/`run` of small programs; skip `-c` and `leanc` entirely for `test` (examples only need
+     elaboration). Decide whether C stays as a fast `--backend c` for the trial harnesses. Then stage 4,
+     contracts.
    - a **change trial** (modify an existing program) is still the best place left for exhaustive
      `match` to show, if it shows anywhere (see night 4, step 4).
 2. Maybe `join` / `contains` built-ins (both adventure programs wrote `contains` and a join again).
