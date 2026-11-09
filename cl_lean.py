@@ -5,7 +5,8 @@ the `example`s as `#eval`s, printing the same EXRUN/EXFAIL lines the C binary pr
 writes C, which Lean's bundled `leanc` turns into the binary.
 
 Stage 1 covers Int, Bool, String, functions, `if`/`while`/`for`, `print` and examples; stage 2 has begun with
-lists (`List[T]` is `Array T`) and structs (`T_Name`, fields `v_name`). Anything else raises Unsupported, which names the construct and the line.
+lists (`List[T]` is `Array T`), structs and enums (`T_Name`, fields `v_name`, variants `v_Name`), `Option`
+and `Result` (`ClResult`), and `match`. Anything else raises Unsupported, which names the construct and the line.
 
 Choices worth knowing:
 - Names are prefixed (`v_x`, `f_name`) like the C backend, so no claude-lang name can collide with a Lean
@@ -48,6 +49,20 @@ def clQuote (s : String) : String :=
 instance : ClShow String := ⟨clQuote⟩
 def clFmtArray {α : Type} (f : α → String) (xs : Array α) : String := "[" ++ ", ".intercalate (xs.toList.map f) ++ "]"
 instance {α : Type} [ClShow α] : ClShow (Array α) := ⟨clFmtArray ClShow.fmt⟩
+
+/-- `Result[T, E]` (D7, D24). Not Lean's `Except`, which has no `BEq`; the names match claude-lang's. -/
+inductive ClResult (α ε : Type) where
+  | ok (value : α)
+  | err (error : ε)
+deriving BEq, Inhabited
+def clFmtOption {α : Type} (f : α → String) : Option α → String
+  | some x => "Some(" ++ f x ++ ")"
+  | none => "None"
+def clFmtResult {α ε : Type} (f : α → String) (g : ε → String) : ClResult α ε → String
+  | .ok x => "Ok(" ++ f x ++ ")"
+  | .err e => "Err(" ++ g e ++ ")"
+instance {α : Type} [ClShow α] : ClShow (Option α) := ⟨clFmtOption ClShow.fmt⟩
+instance {α ε : Type} [ClShow α] [ClShow ε] : ClShow (ClResult α ε) := ⟨clFmtResult ClShow.fmt ClShow.fmt⟩
 
 def clIndexMsg (loc : String) (i : Int) (n : Nat) : String :=
   loc ++ ": runtime error: " ++
@@ -111,6 +126,28 @@ LTYPE = {"Int": "Int", "Bool": "Bool", "String": "String", "Unit": "Unit"}
 
 
 STRUCTS = {}  # struct name -> its declaration; set by LeanEmitter, read by ltype and showable
+ENUMS = {}  # enum name -> its declaration (variants: [(name, fields, tok)])
+
+
+def targs(t):
+    """The type arguments of `Option[T]` / `Result[T, E]` / `List[T]`, split at top-level commas."""
+    inner, out, depth, cur = t[t.index("[") + 1:-1], [], 0, ""
+    for ch in inner:
+        if ch == "," and depth == 0:
+            out.append(cur.strip())
+            cur = ""
+            continue
+        depth += {"[": 1, "]": -1}.get(ch, 0)
+        cur += ch
+    return out + [cur.strip()]
+
+
+def is_option(t):
+    return isinstance(t, str) and t.startswith("Option[")
+
+
+def is_result(t):
+    return isinstance(t, str) and t.startswith("Result[")
 
 
 def is_list(t):
@@ -122,13 +159,20 @@ def ltype(t, where):
         return LTYPE[t]
     if is_list(t):
         return f"(Array {ltype(t[5:-1], where)})"
-    if t in STRUCTS:
+    if t in STRUCTS or t in ENUMS:
         return f"T_{t}"
+    if is_option(t):
+        return f"(Option {ltype(targs(t)[0], where)})"
+    if is_result(t):
+        a, b = targs(t)
+        return f"(ClResult {ltype(a, where)} {ltype(b, where)})"
     raise Unsupported(f"the type `{t}` ({where})")
 
 
 def showable(t):
-    return t in ("Int", "Bool", "String") or t in STRUCTS or (is_list(t) and showable(t[5:-1]))
+    if t in ("Int", "Bool", "String") or t in STRUCTS or t in ENUMS:
+        return True
+    return (is_list(t) or is_option(t) or is_result(t)) and all(showable(a) for a in targs(t))
 
 
 def fmt_of(t, e, depth=0):
@@ -138,17 +182,25 @@ def fmt_of(t, e, depth=0):
         return f"(toString {e})"
     if t == "String":
         return f"(clQuote {e})"
-    if t in STRUCTS:
+    if t in STRUCTS or t in ENUMS:
         return f"(T_{t}.clFmt {e})"
-    if is_list(t):
-        y = f"cl_y{depth}"
-        return f"(clFmtArray (fun {y} => {fmt_of(t[5:-1], y, depth + 1)}) {e})"
+    if is_list(t) or is_option(t) or is_result(t):
+        fns = []
+        for j, a in enumerate(targs(t)):
+            y = f"cl_y{depth}_{j}"
+            fns.append(f"(fun {y} => {fmt_of(a, y, depth + 1)})")
+        helper = "clFmtArray" if is_list(t) else "clFmtOption" if is_option(t) else "clFmtResult"
+        return f"({helper} {' '.join(fns)} {e})"
     raise Unsupported(f"printing a `{t}`")
 
 
 def type_refs(t):
-    """Struct names a type mentions (through lists too)."""
-    return {t} if t in STRUCTS else type_refs(t[5:-1]) if is_list(t) else set()
+    """Struct and enum names a type mentions (through lists, Option and Result too)."""
+    if t in STRUCTS or t in ENUMS:
+        return {t}
+    if is_list(t) or is_option(t) or is_result(t):
+        return set().union(*[type_refs(a) for a in targs(t)])
+    return set()
 
 
 def calls_in(node, out):
@@ -215,18 +267,19 @@ def ends_in_return(stmts):
     if s.kind == "if":
         return s.else_body is not None and ends_in_return(s.else_body) and all(
             ends_in_return(b) for _, b in s.branches)
+    if s.kind == "match":  # the checker made it exhaustive
+        return bool(s.arms) and all(ends_in_return(b) for _, b, _ in s.arms)
     return False
 
 
 class LeanEmitter:
     def __init__(self, fns, structs, path):
         self.fns, self.path = fns, path
-        for st in structs:
-            if st.name != "?" and st.kind != "struct":
-                raise Unsupported(f"`{st.kind} {st.name}` (line {st.tok.line}): enums")
-        self.structs = [st for st in structs if st.name != "?" and st.kind == "struct"]
+        self.types = [st for st in structs if st.name != "?"]
         STRUCTS.clear()
-        STRUCTS.update({st.name: st for st in self.structs})
+        STRUCTS.update({st.name: st for st in self.types if st.kind == "struct"})
+        ENUMS.clear()
+        ENUMS.update({st.name: st for st in self.types if st.kind == "enum"})
         self.by_name = {f.name: f for f in fns}
         self.examples = [s for f in fns for s in f.body if s.kind == "example"]
         self.tmp = 0
@@ -241,7 +294,7 @@ class LeanEmitter:
 
     def emit(self):
         out = [PRELUDE.replace("@FILE@", json.dumps(self.path))]
-        self.struct_decls(out)
+        self.type_decls(out)
         names = [f.name for f in self.fns]
         # Examples aren't part of the function, so a function whose examples call it isn't recursive.
         edges = {f.name: sorted(n for n in calls_in([s for s in f.body if s.kind != "example"], set())
@@ -267,40 +320,62 @@ class LeanEmitter:
             out.append("def main : IO Unit := f_main ()" if io else "def main : IO Unit := pure (f_main ())")
         return "\n".join(out) + "\n"
 
-    def struct_decls(self, out):
-        """Structs (D22) as Lean structures, each after the ones its fields use. A struct can contain itself
-        only through a list, which Lean takes as a nested inductive. Then one formatter per struct, all in one
-        `mutual` block since formatters of structs that contain each other call each other."""
-        if not self.structs:
+    def type_decls(self, out):
+        """Structs (D22) as Lean structures and enums (D24) as inductives, each after the types it uses. A type
+        can contain itself (a struct only through a list), which Lean takes as a (nested) inductive. Then one
+        formatter per type, all in one `mutual` block, since formatters of types inside each other call each
+        other."""
+        if not self.types:
             return
-        names = [st.name for st in self.structs]
-        edges = {st.name: sorted(set().union(*[type_refs(t) for _, t, _ in st.fields]) - {st.name})
-                 for st in self.structs}
+
+        def fields_of(st):
+            return st.fields if st.kind == "struct" else [f for _, fs, _ in st.variants for f in fs]
+        names = [st.name for st in self.types]
+        edges = {st.name: sorted(set().union(*[type_refs(t) for _, t, _ in fields_of(st)]) - {st.name})
+                 for st in self.types}
         for comp in sccs(names, edges):
             if len(comp) > 1:
-                raise Unsupported(f"structs that contain each other ({', '.join(comp)})")
-            st = STRUCTS[comp[0]]
-            out.append(f"structure T_{st.name} where")
-            for fname, t, _ in st.fields:
-                out.append(f"  v_{fname} : {ltype(t, f'field `{fname}` of struct {st.name}')}")
+                raise Unsupported(f"types that contain each other ({', '.join(comp)})")
+            st = next(x for x in self.types if x.name == comp[0])
+            if st.kind == "struct":
+                out.append(f"structure T_{st.name} where")
+                for fname, t, _ in st.fields:
+                    out.append(f"  v_{fname} : {ltype(t, f'field `{fname}` of struct {st.name}')}")
+            else:
+                out.append(f"inductive T_{st.name} where")
+                for vname, fs, _ in st.variants:
+                    args = "".join(f" (v_{fn} : {ltype(t, f'field `{fn}` of {vname}')})" for fn, t, _ in fs)
+                    out.append(f"  | v_{vname}{args}")
             out.append("deriving BEq, Inhabited")
             out.append("")
-        many = len(self.structs) > 1
+        many = len(self.types) > 1
         if many:
             out.append("mutual")
-        for st in self.structs:
-            parts = [lean_str(f"{st.name}(")]
-            for j, (fname, t, _) in enumerate(st.fields):
-                parts.append(lean_str(f"{', ' if j else ''}{fname}: "))
-                parts.append(fmt_of(t, f"r.v_{fname}"))
-            parts.append(lean_str(")"))
+        for st in self.types:
             out.append(f"partial def T_{st.name}.clFmt (r : T_{st.name}) : String :=")
-            out.append("  " + " ++ ".join(parts))
+            if st.kind == "struct":
+                out.append("  " + self.fmt_fields(st.name, [(fn, t, f"r.v_{fn}") for fn, t, _ in st.fields]))
+                continue
+            out.append("  match r with")
+            for vname, fs, _ in st.variants:
+                binds = [f"c{j}" for j in range(len(fs))]
+                text = (self.fmt_fields(vname, [(fn, t, binds[j]) for j, (fn, t, _) in enumerate(fs)]) if fs
+                        else lean_str(vname))
+                out.append(f"  | .v_{vname}{''.join(' ' + b for b in binds)} => {text}")
         if many:
             out.append("end")
-        for st in self.structs:
+        for st in self.types:
             out.append(f"instance : ClShow T_{st.name} := ⟨T_{st.name}.clFmt⟩")
         out.append("")
+
+    def fmt_fields(self, name, fields):
+        """`Name(a: 1, b: "x")`, the way one is made (D22, D24)."""
+        parts = [lean_str(f"{name}(")]
+        for j, (fname, t, e) in enumerate(fields):
+            parts.append(lean_str(f"{', ' if j else ''}{fname}: "))
+            parts.append(fmt_of(t, e))
+        parts.append(lean_str(")"))
+        return " ++ ".join(parts)
 
     def function(self, f, recursive, out):
         self.cur = f
@@ -355,6 +430,8 @@ class LeanEmitter:
                 if s.else_body is not None:
                     out.append(f"{ind}else")
                     self.block(s.else_body, depth + 1, out)
+            elif k == "match":
+                self.match_stmt(s, depth, out)
             elif k == "while":
                 out.append(f"{ind}while {self.expr(s.cond)} do")
                 self.block(s.body, depth + 1, out)
@@ -399,6 +476,28 @@ class LeanEmitter:
         out.append(f"{ind}for {k} in (0 : Int)...<{count} do")
         out.append(f"{ind}  let {v} : Int := {top} - {k}")
         self.block(s.body, depth + 1, out)
+
+    def match_stmt(self, s, depth, out):
+        """A `do`-block `match`, so `break`, `continue` and `return` in an arm act on the enclosing loop or
+        function, as in C (D24). Fields are bound by position in the constructor; unbound ones are `_`."""
+        ind = "  " * depth
+        t = s.subj.ty
+        out.append(f"{ind}match {self.expr(s.subj)} with")
+        for pat, body, _ in s.arms:
+            if pat.variant == "_":
+                out.append(f"{ind}| _ =>")
+            else:
+                if t in ENUMS:
+                    con = f"T_{t}.v_{pat.variant}"
+                    nfields = len(ENUMS[t].variants[pat.tag][1])
+                else:
+                    con = {"Some": "some", "None": "none", "Ok": "ClResult.ok", "Err": "ClResult.err"}[pat.variant]
+                    nfields = 0 if pat.variant == "None" else 1
+                args = ["_"] * nfields
+                for fk, name, _ in pat.slots:
+                    args[fk] = f"v_{name}"
+                out.append(f"{ind}| {con}{''.join(' ' + a for a in args)} =>")
+            self.block(body, depth + 1, out)
 
     def set_path(self, s, ind, out):
         """`xs[i] = v` and deeper paths like `grid[i][j] = v` (D23), in C's order: the value first, then the
@@ -466,7 +565,9 @@ class LeanEmitter:
             return f"{self.expr(e.base)}.v_{e.name}"
         if k == "name":
             if getattr(e, "variant", None):
-                raise Unsupported(f"enum variants (line {e.tok.line})")
+                if e.variant[0] == "Option":
+                    return f"(none : {ltype(e.ty, 'None')})"
+                return f"T_{e.variant[0]}.v_{e.name}"
             return f"v_{e.name}"
         if k == "neg":
             return f"(-{self.expr(e.expr)})"
@@ -495,13 +596,19 @@ class LeanEmitter:
 
     def call(self, e, bare=False):
         """A call. An io call inside an expression is lifted with `(← ...)`; as a statement it's `bare`."""
-        if getattr(e, "variant", None):
-            raise Unsupported(f"constructing `{e.name}` (line {e.tok.line})")
-        if getattr(e, "ctor", False):  # Point(x: 1, y: 2): the fields in declared order (D22)
+        if getattr(e, "variant", None) or getattr(e, "ctor", False):
+            # Point(x: 1, y: 2), Moved(x: 1, y: 2), Some(3): the fields in declared order (D22, D24)
             vals = [None] * len(e.args)
             for i, (_, _, a) in enumerate(e.args):
                 vals[e.order[i]] = self.expr(a)
-            return f"(T_{e.name}.mk {' '.join(vals)})"
+            args = " ".join(vals)
+            if getattr(e, "ctor", False):
+                return f"(T_{e.name}.mk {args})"
+            if e.variant[0] == "Option":
+                return f"(some {args})"
+            if e.variant[0] == "Result":
+                return f"(ClResult.{'ok' if e.name == 'Ok' else 'err'} {args} : {ltype(e.ty, e.name)})"
+            return f"(T_{e.variant[0]}.v_{e.name} {args})"
         if e.name == "print":
             a = e.args[0][2]
             c = f"IO.println {self.show(a)}"

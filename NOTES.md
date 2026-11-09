@@ -378,6 +378,17 @@ design and its decisions (D1...).
   **`tests/run.py --backend lean`: 26 pass, 0 fail, 2 skipped** (enums, options). Gap: structs that contain
   each other (A has `List[B]`, B has `List[A]`) raise Unsupported; Lean would need a `mutual` structure.
 
+- 2026-11-09 (night 5, step 4): **D26 stage 2 done: enums, `Option`/`Result` and `match` on the Lean backend;
+  `tests/run.py --backend lean` passes 28/28 with nothing skipped.** Enums are `inductive T_Name` (variants
+  `v_Name`, fields `v_field`), declared with the structs in one dependency order; an enum that contains itself
+  directly (`Add(left: Expr, right: Expr)`) is an ordinary inductive. `Option[T]` is Lean's `Option`; `Result`
+  is a small `ClResult` (`ok value` / `err error`), not `Except`, which has no `BEq`. Formatters for structs and
+  enums share one `mutual` block (`Moved(x: 1, y: 2)`, bare `Done`, `Some(3)`, `Err("bad")`). `match` is a
+  `do`-block `match` (probe: `break`/`continue` in an arm reach the enclosing loop), binding fields by
+  position from `pat.slots` with `_` for the rest; a `match` whose every arm returns now counts as returning,
+  so no dead trap follows it. `trials/backends.py` runs every claude-lang program from the trial results
+  (165 distinct) through both backends and compares exit code, stdout and stderr.
+
 ## Next step
 1. **Formal verification** (Ari, 2026-11-07: "we definitely want proofs, not just fuzzing"; see
    DESIGN.md open questions): contracts (`requires`/`ensures`), build-time counterexample search,
@@ -397,14 +408,11 @@ design and its decisions (D1...).
      if anywhere. Sonnet only once a set separates anything.
    - the **Lean-direct baseline** is done (night 4, steps 5-6), and **D26 decides the direction: compile
      claude-lang to Lean 4.** Stage 1 is done (night 5, step 1: `cl_lean.py`, `--backend lean`).
-     Lists and structs are done too (night 5, steps 2-3). **Next: enums, `Option`/`Result` and `match`**:
-     enums as `inductive T_Name` (variant fields named, `deriving BEq, Inhabited`; C prints `Moved(x: 1, y: 2)`
-     or a bare `Done`), `Option[T]` -> `Option`, `Result[T, E]` -> `Except E T` (print `Some(3)`, `None`,
-     `Ok(3)`, `Err("bad")`), `match` -> Lean `match` with the arm bindings (`pat.slots`), wildcard `_`, and
-     `if let` if the checker has it (see the night-4 notes). A `break`/`continue`/`return` inside a match arm
-     must still reach the enclosing loop or function, which Lean's `do`-`match` allows. That clears the last two
-     skips, so `tests/run.py --backend lean` skips nothing; then stage 3 (Lean becomes the default). Also fix the `and`/`or` io-lifting gap above
-     (emit the right side's action under an `if`).
+     Stage 2 is done too (night 5, steps 2-4: lists, structs, enums, Option/Result, match). **Next: stage 3,
+     Lean becomes the default** once `trials/backends.py` shows the trial programs agree (fix what differs),
+     the `and`/`or` io-lifting gap is fixed, and the build time is looked at (Lean ~9 s vs C ~0.2 s per
+     program: trials compile a lot; consider `lean` without `-c` for `test`, and whether C stays as a fast
+     `--backend c` for the trial harnesses). Then stage 4, contracts.
    - a **change trial** (modify an existing program) is still the best place left for exhaustive
      `match` to show, if it shows anywhere (see night 4, step 4).
 2. Maybe `join` / `contains` built-ins (both adventure programs wrote `contains` and a join again).
