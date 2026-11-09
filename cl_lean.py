@@ -5,7 +5,7 @@ the `example`s as `#eval`s, printing the same EXRUN/EXFAIL lines the C binary pr
 writes C, which Lean's bundled `leanc` turns into the binary.
 
 Stage 1 covers Int, Bool, String, functions, `if`/`while`/`for`, `print` and examples; stage 2 has begun with
-lists (`List[T]` is `Array T`). Anything else raises Unsupported, which names the construct and the line.
+lists (`List[T]` is `Array T`) and structs (`T_Name`, fields `v_name`). Anything else raises Unsupported, which names the construct and the line.
 
 Choices worth knowing:
 - Names are prefixed (`v_x`, `f_name`) like the C backend, so no claude-lang name can collide with a Lean
@@ -46,7 +46,8 @@ def clQuote (s : String) : String :=
     | '"' => "\\\"" | '\\' => "\\\\" | '\n' => "\\n" | '\t' => "\\t" | '{' => "\\{" | '}' => "\\}"
     | c => c.toString) ++ "\""
 instance : ClShow String := ⟨clQuote⟩
-instance {α : Type} [ClShow α] : ClShow (Array α) := ⟨fun xs => "[" ++ ", ".intercalate (xs.toList.map ClShow.fmt) ++ "]"⟩
+def clFmtArray {α : Type} (f : α → String) (xs : Array α) : String := "[" ++ ", ".intercalate (xs.toList.map f) ++ "]"
+instance {α : Type} [ClShow α] : ClShow (Array α) := ⟨clFmtArray ClShow.fmt⟩
 
 def clIndexMsg (loc : String) (i : Int) (n : Nat) : String :=
   loc ++ ": runtime error: " ++
@@ -109,6 +110,9 @@ def lean_str(t):
 LTYPE = {"Int": "Int", "Bool": "Bool", "String": "String", "Unit": "Unit"}
 
 
+STRUCTS = {}  # struct name -> its declaration; set by LeanEmitter, read by ltype and showable
+
+
 def is_list(t):
     return isinstance(t, str) and t.startswith("List[") and t.endswith("]")
 
@@ -118,11 +122,33 @@ def ltype(t, where):
         return LTYPE[t]
     if is_list(t):
         return f"(Array {ltype(t[5:-1], where)})"
+    if t in STRUCTS:
+        return f"T_{t}"
     raise Unsupported(f"the type `{t}` ({where})")
 
 
 def showable(t):
-    return t in ("Int", "Bool", "String") or (is_list(t) and showable(t[5:-1]))
+    return t in ("Int", "Bool", "String") or t in STRUCTS or (is_list(t) and showable(t[5:-1]))
+
+
+def fmt_of(t, e, depth=0):
+    """Lean for value e of claude-lang type t in its printed form inside a list or struct, with no type
+    classes, so the struct formatters can call each other in one `mutual` block."""
+    if t in ("Int", "Bool"):
+        return f"(toString {e})"
+    if t == "String":
+        return f"(clQuote {e})"
+    if t in STRUCTS:
+        return f"(T_{t}.clFmt {e})"
+    if is_list(t):
+        y = f"cl_y{depth}"
+        return f"(clFmtArray (fun {y} => {fmt_of(t[5:-1], y, depth + 1)}) {e})"
+    raise Unsupported(f"printing a `{t}`")
+
+
+def type_refs(t):
+    """Struct names a type mentions (through lists too)."""
+    return {t} if t in STRUCTS else type_refs(t[5:-1]) if is_list(t) else set()
 
 
 def calls_in(node, out):
@@ -195,9 +221,12 @@ def ends_in_return(stmts):
 class LeanEmitter:
     def __init__(self, fns, structs, path):
         self.fns, self.path = fns, path
-        if any(st.name != "?" for st in structs):
-            st = next(st for st in structs if st.name != "?")
-            raise Unsupported(f"`{st.kind} {st.name}` (line {st.tok.line}): structs and enums")
+        for st in structs:
+            if st.name != "?" and st.kind != "struct":
+                raise Unsupported(f"`{st.kind} {st.name}` (line {st.tok.line}): enums")
+        self.structs = [st for st in structs if st.name != "?" and st.kind == "struct"]
+        STRUCTS.clear()
+        STRUCTS.update({st.name: st for st in self.structs})
         self.by_name = {f.name: f for f in fns}
         self.examples = [s for f in fns for s in f.body if s.kind == "example"]
         self.tmp = 0
@@ -212,6 +241,7 @@ class LeanEmitter:
 
     def emit(self):
         out = [PRELUDE.replace("@FILE@", json.dumps(self.path))]
+        self.struct_decls(out)
         names = [f.name for f in self.fns]
         # Examples aren't part of the function, so a function whose examples call it isn't recursive.
         edges = {f.name: sorted(n for n in calls_in([s for s in f.body if s.kind != "example"], set())
@@ -236,6 +266,41 @@ class LeanEmitter:
             io = self.by_name["main"].uses_io
             out.append("def main : IO Unit := f_main ()" if io else "def main : IO Unit := pure (f_main ())")
         return "\n".join(out) + "\n"
+
+    def struct_decls(self, out):
+        """Structs (D22) as Lean structures, each after the ones its fields use. A struct can contain itself
+        only through a list, which Lean takes as a nested inductive. Then one formatter per struct, all in one
+        `mutual` block since formatters of structs that contain each other call each other."""
+        if not self.structs:
+            return
+        names = [st.name for st in self.structs]
+        edges = {st.name: sorted(set().union(*[type_refs(t) for _, t, _ in st.fields]) - {st.name})
+                 for st in self.structs}
+        for comp in sccs(names, edges):
+            if len(comp) > 1:
+                raise Unsupported(f"structs that contain each other ({', '.join(comp)})")
+            st = STRUCTS[comp[0]]
+            out.append(f"structure T_{st.name} where")
+            for fname, t, _ in st.fields:
+                out.append(f"  v_{fname} : {ltype(t, f'field `{fname}` of struct {st.name}')}")
+            out.append("deriving BEq, Inhabited")
+            out.append("")
+        many = len(self.structs) > 1
+        if many:
+            out.append("mutual")
+        for st in self.structs:
+            parts = [lean_str(f"{st.name}(")]
+            for j, (fname, t, _) in enumerate(st.fields):
+                parts.append(lean_str(f"{', ' if j else ''}{fname}: "))
+                parts.append(fmt_of(t, f"r.v_{fname}"))
+            parts.append(lean_str(")"))
+            out.append(f"partial def T_{st.name}.clFmt (r : T_{st.name}) : String :=")
+            out.append("  " + " ++ ".join(parts))
+        if many:
+            out.append("end")
+        for st in self.structs:
+            out.append(f"instance : ClShow T_{st.name} := ⟨T_{st.name}.clFmt⟩")
+        out.append("")
 
     def function(self, f, recursive, out):
         self.cur = f
@@ -344,18 +409,23 @@ class LeanEmitter:
             steps.append(n)
             n = n.base
         steps.reverse()
-        if any(x.kind == "field" for x in steps):
-            raise Unsupported(f"assigning to a struct field (line {s.tok.line})")
         self.tmp += 1
         t = self.tmp
         out.append(f"{ind}let cl_v{t} := {self.expr(s.expr)}")
         for j, x in enumerate(steps):
-            out.append(f"{ind}let cl_i{t}_{j} : Int := {self.expr(x.index)}")
+            if x.kind == "index":
+                out.append(f"{ind}let cl_i{t}_{j} : Int := {self.expr(x.index)}")
 
         def update(j, cur):
+            """A field step is `{ r with f := ... }`, which Lean does in place when r isn't shared (its
+            reset/reuse also leaves the field's old value unshared, so a list inside stays in place too)."""
             x = steps[j]
+            last = j == len(steps) - 1
+            if x.kind == "field":
+                inner = f"cl_v{t}" if last else update(j + 1, f"{cur}.v_{x.name}")
+                return f"{{ {cur} with v_{x.name} := {inner} }}"
             loc = lean_str(self.loc(x.tok))
-            if j == len(steps) - 1:
+            if last:
                 return f"clSet {cur} cl_i{t}_{j} cl_v{t} {loc}"
             return f"clModify {cur} cl_i{t}_{j} (fun cl_r{j} => {update(j + 1, f'cl_r{j}')}) {loc}"
         out.append(f"{ind}v_{n.name} := {update(0, f'v_{n.name}')}")
@@ -392,6 +462,8 @@ class LeanEmitter:
             return f"(#[{items}] : {ltype(e.ty, 'a list')})"
         if k == "index":
             return f"(clGet {self.expr(e.base)} {self.expr(e.index)} {lean_str(self.loc(e.tok))})"
+        if k == "field":
+            return f"{self.expr(e.base)}.v_{e.name}"
         if k == "name":
             if getattr(e, "variant", None):
                 raise Unsupported(f"enum variants (line {e.tok.line})")
@@ -401,7 +473,7 @@ class LeanEmitter:
         if k == "not":
             return f"(!{self.expr(e.expr)})"
         if k == "bin":
-            if e.left.ty not in ("Int", "Bool", "String") and not (is_list(e.left.ty) and e.op in ("==", "!=")):
+            if e.left.ty not in ("Int", "Bool", "String") and not (showable(e.left.ty) and e.op in ("==", "!=")):
                 raise Unsupported(f"`{e.op}` on `{e.left.ty}` (line {e.tok.line})")
             l, r = self.expr(e.left), self.expr(e.right)
             if e.op == "/":
@@ -423,8 +495,13 @@ class LeanEmitter:
 
     def call(self, e, bare=False):
         """A call. An io call inside an expression is lifted with `(← ...)`; as a statement it's `bare`."""
-        if getattr(e, "variant", None) or getattr(e, "ctor", False):
+        if getattr(e, "variant", None):
             raise Unsupported(f"constructing `{e.name}` (line {e.tok.line})")
+        if getattr(e, "ctor", False):  # Point(x: 1, y: 2): the fields in declared order (D22)
+            vals = [None] * len(e.args)
+            for i, (_, _, a) in enumerate(e.args):
+                vals[e.order[i]] = self.expr(a)
+            return f"(T_{e.name}.mk {' '.join(vals)})"
         if e.name == "print":
             a = e.args[0][2]
             c = f"IO.println {self.show(a)}"

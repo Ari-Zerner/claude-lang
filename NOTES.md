@@ -365,6 +365,19 @@ design and its decisions (D1...).
   bignum beyond, so the same loops summing to 10^12 took 0.48 s (the price of unbounded `Int`, D26). Not the
   range loop: a Nat range measured the same.
 
+- 2026-11-09 (night 5, step 3): **D26 stage 2b, structs on the Lean backend.** A struct is a Lean `structure
+  T_Name` with fields `v_name` (prefixed, so no field can clash with Lean keywords like `from`/`at`/`show` or
+  generated names like `mk`/`rec`), `deriving BEq, Inhabited`, emitted after the structs its fields use. A
+  struct that contains itself through a list (`Tree`) is a nested inductive, and deriving handles it. Each gets
+  a generated `partial def T_Name.clFmt` printing `Point(x: 1, y: 2)` (one `mutual` block, no type classes
+  inside, so formatters of structs in structs just call each other), then a `ClShow` instance. Construction is
+  `T_Name.mk` with fields in declared order (`e.order`); `p.x` is a projection; field steps in assignment paths
+  are `{ r with v_f := ... }`. **No hand-written in-place helpers needed:** Lean's reset/reuse already updates
+  `{ b with items := b.items.set! ... }` in place (probe: 100k updates of a 100k-item field, 0.04 s), and a
+  benchmark of 1M updates through `s.board[i]` and `s.cells[i].hits` runs in 0.23 s on both backends.
+  **`tests/run.py --backend lean`: 26 pass, 0 fail, 2 skipped** (enums, options). Gap: structs that contain
+  each other (A has `List[B]`, B has `List[A]`) raise Unsupported; Lean would need a `mutual` structure.
+
 ## Next step
 1. **Formal verification** (Ari, 2026-11-07: "we definitely want proofs, not just fuzzing"; see
    DESIGN.md open questions): contracts (`requires`/`ensures`), build-time counterexample search,
@@ -384,11 +397,13 @@ design and its decisions (D1...).
      if anywhere. Sonnet only once a set separates anything.
    - the **Lean-direct baseline** is done (night 4, steps 5-6), and **D26 decides the direction: compile
      claude-lang to Lean 4.** Stage 1 is done (night 5, step 1: `cl_lean.py`, `--backend lean`).
-     Lists are done too (night 5, step 2). **Next: structs** (`structure ... deriving BEq, Inhabited`, a
-     `ClShow` instance printing `Point(x: 1, y: 2)`, construction with fields reordered to declared order as C's
-     `e.order` does, `p.x`, and `set_path` with field steps: `{ r with f := ... }`, value first as in C), then
-     enums, `Option`/`Result` and `match`, until `tests/run.py --backend lean`
-     skips nothing; then stage 3 (Lean becomes the default). Also fix the `and`/`or` io-lifting gap above
+     Lists and structs are done too (night 5, steps 2-3). **Next: enums, `Option`/`Result` and `match`**:
+     enums as `inductive T_Name` (variant fields named, `deriving BEq, Inhabited`; C prints `Moved(x: 1, y: 2)`
+     or a bare `Done`), `Option[T]` -> `Option`, `Result[T, E]` -> `Except E T` (print `Some(3)`, `None`,
+     `Ok(3)`, `Err("bad")`), `match` -> Lean `match` with the arm bindings (`pat.slots`), wildcard `_`, and
+     `if let` if the checker has it (see the night-4 notes). A `break`/`continue`/`return` inside a match arm
+     must still reach the enclosing loop or function, which Lean's `do`-`match` allows. That clears the last two
+     skips, so `tests/run.py --backend lean` skips nothing; then stage 3 (Lean becomes the default). Also fix the `and`/`or` io-lifting gap above
      (emit the right side's action under an `if`).
    - a **change trial** (modify an existing program) is still the best place left for exhaustive
      `match` to show, if it shows anywhere (see night 4, step 4).
