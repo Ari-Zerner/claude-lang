@@ -4,8 +4,8 @@ Emits a Lean 4 file from the checked AST that clc.py's front end produces. `lean
 the `example`s as `#eval`s, printing the same EXRUN/EXFAIL lines the C binary prints for `--cl-examples`) and
 writes C, which Lean's bundled `leanc` turns into the binary.
 
-Stage 1 covers Int, Bool, String, functions, `if`/`while`/`for` over numbers, `print` and examples. Anything
-else raises Unsupported, which names the construct and the line.
+Stage 1 covers Int, Bool, String, functions, `if`/`while`/`for`, `print` and examples; stage 2 has begun with
+lists (`List[T]` is `Array T`). Anything else raises Unsupported, which names the construct and the line.
 
 Choices worth knowing:
 - Names are prefixed (`v_x`, `f_name`) like the C backend, so no claude-lang name can collide with a Lean
@@ -34,19 +34,51 @@ def clTrap {α : Type} [Inhabited α] (msg : String) : α := default
 @[inline] def clDiv (a b : Int) (msg : String) : Int := if b == 0 then clTrap msg else a / b
 @[inline] def clMod (a b : Int) (msg : String) : Int := if b == 0 then clTrap msg else a % b
 
+/-- claude-lang's printed form of a value inside a list or struct: strings quoted with the language's own
+escapes, lists as `[1, 2]` (D18, D19). At the top of `print` and `{...}` a String prints as itself. -/
+class ClShow (α : Type) where
+  fmt : α → String
+instance : ClShow Int := ⟨toString⟩
+instance : ClShow Bool := ⟨toString⟩
+def clQuote (s : String) : String :=
+  "\"" ++ String.join (s.toList.map fun c =>
+    match c with
+    | '"' => "\\\"" | '\\' => "\\\\" | '\n' => "\\n" | '\t' => "\\t" | '{' => "\\{" | '}' => "\\}"
+    | c => c.toString) ++ "\""
+instance : ClShow String := ⟨clQuote⟩
+instance {α : Type} [ClShow α] : ClShow (Array α) := ⟨fun xs => "[" ++ ", ".intercalate (xs.toList.map ClShow.fmt) ++ "]"⟩
+
+def clIndexMsg (loc : String) (i : Int) (n : Nat) : String :=
+  loc ++ ": runtime error: " ++
+  if i < 0 then s!"index {i} is out of range: indexes start at 0, and there's no negative indexing (the last item is at length - 1)"
+  else if n == 0 then s!"index {i} is out of range: the list is empty"
+  else s!"index {i} is out of range for a list of length {n} (the last index is {n - 1})"
+
+/-- `xs[i]`, stopping the program when i is out of range. -/
+@[inline] def clGet {α : Type} [Inhabited α] (xs : Array α) (i : Int) (loc : String) : α :=
+  if h : 0 ≤ i ∧ i.toNat < xs.size then xs[i.toNat]'h.2 else clTrap (clIndexMsg loc i xs.size)
+/-- `xs[i] = v`; in place when xs isn't shared, which is Lean's own refcounting (D19). -/
+@[inline] def clSet {α : Type} (xs : Array α) (i : Int) (v : α) (loc : String) : Array α :=
+  if h : 0 ≤ i ∧ i.toNat < xs.size then xs.set i.toNat v h.2 else clTrap (clIndexMsg loc i xs.size)
+/-- One step of a deeper path, `xs[i]... = v` (D23): `modify` takes the item out first, so it stays unshared. -/
+@[inline] def clModify {α : Type} (xs : Array α) (i : Int) (f : α → α) (loc : String) : Array α :=
+  if 0 ≤ i ∧ i.toNat < xs.size then xs.modify i.toNat f else clTrap (clIndexMsg loc i xs.size)
+@[inline] def clRepeat {α : Type} (x : α) (n : Int) (msg : String) : Array α :=
+  if n < 0 then clTrap msg else Array.replicate n.toNat x
+
 def clHex (s : String) : String :=
   if s.isEmpty then "-" else
   String.join (s.toUTF8.toList.map fun b =>
     let d := "0123456789abcdef".toList
-    String.mk [d[(b.toNat / 16)]!, d[(b.toNat % 16)]!])
+    String.ofList [d[(b.toNat / 16)]!, d[(b.toNat % 16)]!])
 
 def clExRun (i : Nat) : IO Unit := do IO.println s!"EXRUN {i}"; (← IO.getStdout).flush
 def clExBool (i : Nat) (ok : Bool) : IO Unit := do
   clExRun i
   if !ok then IO.println s!"EXFAIL {i}"
-def clExShow {α : Type} [BEq α] [ToString α] (i : Nat) (tag : String) (l r : α) : IO Unit := do
+def clExShow {α : Type} [BEq α] (i : Nat) (tag : String) (l r : α) (fmt : α → String) : IO Unit := do
   clExRun i
-  if !(l == r) then IO.println s!"{tag} {i} {clHex (toString l)} {clHex (toString r)}"
+  if !(l == r) then IO.println s!"{tag} {i} {clHex (fmt l)} {clHex (fmt r)}"
 '''
 
 
@@ -77,10 +109,20 @@ def lean_str(t):
 LTYPE = {"Int": "Int", "Bool": "Bool", "String": "String", "Unit": "Unit"}
 
 
+def is_list(t):
+    return isinstance(t, str) and t.startswith("List[") and t.endswith("]")
+
+
 def ltype(t, where):
     if t in LTYPE:
         return LTYPE[t]
+    if is_list(t):
+        return f"(Array {ltype(t[5:-1], where)})"
     raise Unsupported(f"the type `{t}` ({where})")
+
+
+def showable(t):
+    return t in ("Int", "Bool", "String") or (is_list(t) and showable(t[5:-1]))
 
 
 def calls_in(node, out):
@@ -214,9 +256,10 @@ class LeanEmitter:
 
     def example(self, i, s):
         e = s.expr
-        if e.kind == "bin" and e.op == "==" and not e.paren and e.left.ty in ("Int", "Bool", "String"):
-            tag = "EXFAILS" if e.left.ty == "String" else "EXFAILV"
-            return f"#eval clExShow {i} {json.dumps(tag)} {self.expr(e.left)} {self.expr(e.right)}"
+        if e.kind == "bin" and e.op == "==" and not e.paren and showable(e.left.ty):
+            tag, fmt = ("EXFAILS", "id") if e.left.ty == "String" else ("EXFAILV", "ClShow.fmt")
+            ty = ltype(e.left.ty, "an example")
+            return f"#eval clExShow {i} {json.dumps(tag)} ({self.expr(e.left)} : {ty}) {self.expr(e.right)} {fmt}"
         return f"#eval clExBool {i} {self.expr(e)}"
 
     # -- statements
@@ -236,6 +279,8 @@ class LeanEmitter:
                     out.append(f"{ind}let {mut}v_{s.name} : {ltype(s.var_ty, f'`{s.name}`')} := {self.expr(s.expr)}")
             elif k == "assign":
                 out.append(f"{ind}v_{s.name} := {self.expr(s.expr)}")
+            elif k in ("setindex", "setfield"):
+                self.set_path(s, ind, out)
             elif k == "return":
                 out.append(f"{ind}return" if s.expr is None else f"{ind}return {self.expr(s.expr)}")
             elif k == "if":
@@ -267,9 +312,14 @@ class LeanEmitter:
         """Bounds are evaluated once, lo first. Counting forwards uses Lean's Int ranges; backwards counts a
         Nat-free offset k up from 0 and derives the variable from it, so `continue` needs no step of its own."""
         ind = "  " * depth
-        if s.src is not None:
-            raise Unsupported(f"`for` over a list (line {s.tok.line})")
         v = f"v_{s.var}"
+        if s.src is not None:
+            # Lean's `for` holds the array it started with, so changing the list inside the loop changes a
+            # copy and the loop walks the original: the snapshot D21 asks for.
+            src = self.expr(s.src)
+            out.append(f"{ind}for {v} in {src}{'.reverse' if s.rev else ''} do")
+            self.block(s.body, depth + 1, out)
+            return
         if not s.rev:
             rng = "...=" if s.incl else "...<"
             out.append(f"{ind}for {v} in {self.expr(s.lo)}{rng}{self.expr(s.hi)} do")
@@ -285,6 +335,31 @@ class LeanEmitter:
         out.append(f"{ind}  let {v} : Int := {top} - {k}")
         self.block(s.body, depth + 1, out)
 
+    def set_path(self, s, ind, out):
+        """`xs[i] = v` and deeper paths like `grid[i][j] = v` (D23), in C's order: the value first, then the
+        indexes left to right, then the walk down, which checks each index as it reaches it."""
+        tgt = s.target
+        steps, n = [], tgt
+        while n.kind in ("index", "field"):
+            steps.append(n)
+            n = n.base
+        steps.reverse()
+        if any(x.kind == "field" for x in steps):
+            raise Unsupported(f"assigning to a struct field (line {s.tok.line})")
+        self.tmp += 1
+        t = self.tmp
+        out.append(f"{ind}let cl_v{t} := {self.expr(s.expr)}")
+        for j, x in enumerate(steps):
+            out.append(f"{ind}let cl_i{t}_{j} : Int := {self.expr(x.index)}")
+
+        def update(j, cur):
+            x = steps[j]
+            loc = lean_str(self.loc(x.tok))
+            if j == len(steps) - 1:
+                return f"clSet {cur} cl_i{t}_{j} cl_v{t} {loc}"
+            return f"clModify {cur} cl_i{t}_{j} (fun cl_r{j} => {update(j + 1, f'cl_r{j}')}) {loc}"
+        out.append(f"{ind}v_{n.name} := {update(0, f'v_{n.name}')}")
+
     # -- expressions
 
     def is_io(self, e):
@@ -297,6 +372,8 @@ class LeanEmitter:
             return self.expr(e)
         if e.ty in ("Int", "Bool"):
             return f"(toString {self.expr(e)})"
+        if showable(e.ty):
+            return f"(ClShow.fmt {self.expr(e)})"
         raise Unsupported(f"showing a `{e.ty}` (line {e.tok.line})")
 
     def expr(self, e):
@@ -310,6 +387,11 @@ class LeanEmitter:
             if not pieces:
                 return '""'
             return pieces[0] if len(pieces) == 1 and e.parts[0][0] == "text" else "(" + " ++ ".join(pieces) + ")"
+        if k == "list":
+            items = ", ".join(self.expr(x) for x in e.items)
+            return f"(#[{items}] : {ltype(e.ty, 'a list')})"
+        if k == "index":
+            return f"(clGet {self.expr(e.base)} {self.expr(e.index)} {lean_str(self.loc(e.tok))})"
         if k == "name":
             if getattr(e, "variant", None):
                 raise Unsupported(f"enum variants (line {e.tok.line})")
@@ -319,7 +401,7 @@ class LeanEmitter:
         if k == "not":
             return f"(!{self.expr(e.expr)})"
         if k == "bin":
-            if e.left.ty not in ("Int", "Bool", "String"):
+            if e.left.ty not in ("Int", "Bool", "String") and not (is_list(e.left.ty) and e.op in ("==", "!=")):
                 raise Unsupported(f"`{e.op}` on `{e.left.ty}` (line {e.tok.line})")
             l, r = self.expr(e.left), self.expr(e.right)
             if e.op == "/":
@@ -348,9 +430,14 @@ class LeanEmitter:
             c = f"IO.println {self.show(a)}"
         elif e.name == "length":
             a = e.args[0][2]
-            if a.ty != "String":
-                raise Unsupported(f"`length` of a `{a.ty}` (line {e.tok.line})")
-            return f"(Int.ofNat {self.expr(a)}.length)"
+            return f"(Int.ofNat {self.expr(a)}.{'length' if a.ty == 'String' else 'size'})"
+        elif e.name in ("append", "repeat"):
+            by = {n: a for n, _, a in e.args}
+            if e.name == "append":
+                # xs = append(list: xs, item: x) pushes in place when xs isn't shared (Lean's refcounting).
+                return f"({self.expr(by['list'])}.push {self.expr(by['item'])})"
+            msg = self.trap_msg(e.tok, "`repeat` needs `times` to be 0 or more")
+            return f"(clRepeat {self.expr(by['item'])} {self.expr(by['times'])} {msg})"
         elif e.name in self.by_name:
             args = " ".join(self.expr(a) for _, _, a in e.args) or "()"
             c = f"f_{e.name} {args}"

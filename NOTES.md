@@ -352,6 +352,19 @@ design and its decisions (D1...).
   Known gaps: an io call on the right of `and`/`or` is lifted with `(← ...)` and so runs even when the left
   side decides; `let _ = pure_call()` may be dropped by Lean's compiler (harmless unless it traps or loops).
 
+- 2026-11-09 (night 5, step 2): **D26 stage 2a, lists on the Lean backend.** `List[T]` is `Array T`;
+  `xs[i]` (`clGet`), `xs[i] = v` (`clSet`) and deeper paths like `grid[i][j] = v` (`clModify` per level, which
+  takes the row out first so it stays unshared; value first, then indexes, then the walk, as in C), `append`
+  (`push`), `repeat`, `length`, list literals, `==` on lists, and `for x in xs` (`.reverse` for `reversed`;
+  Lean's `for` holds the array it started with, which is D21's snapshot). Printing goes through a `ClShow`
+  class giving claude-lang's formats (strings quoted with the language's escapes inside lists); its method is
+  `fmt`, since `show` is a Lean keyword. **`tests/run.py --backend lean`: 24 pass, 0 fail, 4 skipped** (the
+  four that need structs or enums). All four index/`repeat` trap messages match C's byte for byte, and so do
+  nested updates and a list changed inside its own reversed loop. **Speed:** 1M appends + 1M updates in place,
+  0.17 s vs C's 0.04 s while values stay small; Lean's `Int` is a scalar only up to about 2^31 and a heap
+  bignum beyond, so the same loops summing to 10^12 took 0.48 s (the price of unbounded `Int`, D26). Not the
+  range loop: a Nat range measured the same.
+
 ## Next step
 1. **Formal verification** (Ari, 2026-11-07: "we definitely want proofs, not just fuzzing"; see
    DESIGN.md open questions): contracts (`requires`/`ensures`), build-time counterexample search,
@@ -371,11 +384,9 @@ design and its decisions (D1...).
      if anywhere. Sonnet only once a set separates anything.
    - the **Lean-direct baseline** is done (night 4, steps 5-6), and **D26 decides the direction: compile
      claude-lang to Lean 4.** Stage 1 is done (night 5, step 1: `cl_lean.py`, `--backend lean`).
-     **Next: stage 2**, starting with lists: `List[T]` -> `Array T`; `xs[i]` and `xs[i] = v` with the index
-     trap (C's message names the length and last valid index; match it); `append` -> `push` (in place when
-     unshared, which Lean does by itself); `repeat`; `length`; `for x in xs` (a snapshot, D19/D21; Lean's
-     `for x in arr` already is one). Printing needs a `clShow` class giving claude-lang's formats (`[1, 2]`,
-     strings quoted inside lists, `Point(x: 1, y: 2)`), and examples on lists use EXFAILV with it. Then
+     Lists are done too (night 5, step 2). **Next: structs** (`structure ... deriving BEq, Inhabited`, a
+     `ClShow` instance printing `Point(x: 1, y: 2)`, construction with fields reordered to declared order as C's
+     `e.order` does, `p.x`, and `set_path` with field steps: `{ r with f := ... }`, value first as in C), then
      structs, enums, `Option`/`Result`, `match`, deeper `set_path` (D23), until `tests/run.py --backend lean`
      skips nothing; then stage 3 (Lean becomes the default). Also fix the `and`/`or` io-lifting gap above
      (emit the right side's action under an `if`).
