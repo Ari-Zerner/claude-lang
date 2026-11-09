@@ -412,6 +412,15 @@ design and its decisions (D1...).
   program's ~180-210 KB of generated C, so compiling it once into a cached module would save ~40% of the C
   compile and its elaboration: worth doing, but small next to the I/O. The Lean test suite takes ~150 s (C: 8 s).
 
+- 2026-11-09 (night 5, step 6): **D26 stage 3: Lean is the default backend.** `clc.py` defaults to
+  `--backend lean`, and `tests/run.py` runs Lean by default (`--backend c` for C; ~185 s vs 8 s). SPEC.md now
+  says `Int` is a whole number of any size, and the runtime errors are division by zero, a bad index and
+  `repeat` with a negative count. The front end's 64-bit literal check (`int-too-big`) applies only with
+  `--backend c`, whose fix line says to drop the flag. New `tests/ok/bigint.cl` (30!, 2^100, Euclidean `/` and
+  `%` on a 101-bit number) is marked `# backends: lean`, which `tests/run.py` honors. The trial harnesses
+  (`trial.py`, `fixloop.py`, `hidden.py`) pass `--backend c` for fast builds until stage 4 needs Lean. DESIGN
+  D26 records stages 1-3 as done. **Lean 30/30, C 29/29.**
+
 ## Next step
 1. **Formal verification** (Ari, 2026-11-07: "we definitely want proofs, not just fuzzing"; see
    DESIGN.md open questions): contracts (`requires`/`ensures`), build-time counterexample search,
@@ -432,14 +441,17 @@ design and its decisions (D1...).
    - the **Lean-direct baseline** is done (night 4, steps 5-6), and **D26 decides the direction: compile
      claude-lang to Lean 4.** Stage 1 is done (night 5, step 1: `cl_lean.py`, `--backend lean`).
      Stage 2 is done too (night 5, steps 2-4: lists, structs, enums, Option/Result, match). **Next: stage 3,
-     Lean becomes the default.** The trial programs agree (127/127, night 5 step 4), and build time is
-     measured and cut (step 5: test ~1.8 s, run ~7.5 s on this box, mostly paging). Make `--backend lean` the
-     default (and `tests/run.py` run Lean by default), keeping `--backend c` for the trial harnesses' fast loops
-     for now rather than retiring it at once. Optional: a precompiled prelude module (saves ~40% of the C
-     compile). **Then stage 4, contracts**, the point of D26: `requires`/`ensures` checked at run time first,
-     then proved by the automation (`omega`, `simp`, `decide`, `grind`), with goals reported at claude-lang lines.
-     Recursive functions are `partial def` today, which can't be proved about; stage 4 needs real `def`s with
-     termination (`termination_by`/`decreasing_by`, or structural recursion where Lean finds it).
+     Lean becomes the default.** Done (night 5, step 6); C stays as `--backend c` for the trial harnesses.
+     **Next: stage 4, contracts**, the point of D26. Bite-sized order: (a) recursive functions as real `def`s,
+     not `partial def`: try plain `def` first (Lean finds structural recursion or a `termination_by` measure
+     itself for many), fall back to `partial` when Lean can't prove termination, and report which, since only a
+     real `def` can be proved about; `while` loops are a separate problem (Lean's `while` is `partial` inside;
+     loops that need proofs may have to become `for` or recursion, or use `Loop` specs). (b) Syntax:
+     `requires <Bool expr>` / `ensures <Bool expr>` lines next to `example` (with `result` naming the return
+     value), checked at run time first (a failed `requires` is the caller's error at the call's line, a failed
+     `ensures` the function's). (c) Proofs: emit `theorem f_spec : requires -> ensures` and try `by unfold;
+     omega`, `simp`, `grind`, `decide`; report an unproved goal at the claude-lang line, in claude-lang terms.
+     Optional anytime: a precompiled prelude module (saves ~40% of the C compile).
    - a **change trial** (modify an existing program) is still the best place left for exhaustive
      `match` to show, if it shows anywhere (see night 4, step 4).
 2. Maybe `join` / `contains` built-ins (both adventure programs wrote `contains` and a join again).

@@ -319,6 +319,10 @@ Claude differs from a human programmer in ways that matter for language design:
     checked at run time, then proved by the automation, with `invariant` on loops; (5) the trial
     that answers Ari's sanity check: the Lean-direct baseline's tasks written in claude-lang with
     contracts, compared on success, fix rounds and how much Claude has to write.
+  - *Status (2026-11-09, night 5): stages 1-3 done.* Every test and all 127 trial programs behave identically
+    on both backends, and Lean is the default. C stays as `--backend c` for the trial harnesses' many builds
+    (Lean ~7-10 s per program on this box, C ~0.2 s) and keeps 64-bit `Int`, so literals past 64 bits are an
+    error there only. It retires when stage 4 needs every build on Lean.
   - *Escape hatch, open:* when the automation can't close a goal, the first hint is in claude-lang:
     a helper function whose `ensures` states the missing fact, which works as a lemma. A raw Lean
     `proof` block is the last resort, and that's where the name-table error layer goes.
