@@ -387,7 +387,7 @@ design and its decisions (D1...).
      Lists are done too (night 5, step 2). **Next: structs** (`structure ... deriving BEq, Inhabited`, a
      `ClShow` instance printing `Point(x: 1, y: 2)`, construction with fields reordered to declared order as C's
      `e.order` does, `p.x`, and `set_path` with field steps: `{ r with f := ... }`, value first as in C), then
-     structs, enums, `Option`/`Result`, `match`, deeper `set_path` (D23), until `tests/run.py --backend lean`
+     enums, `Option`/`Result` and `match`, until `tests/run.py --backend lean`
      skips nothing; then stage 3 (Lean becomes the default). Also fix the `and`/`or` io-lifting gap above
      (emit the right side's action under an `if`).
    - a **change trial** (modify an existing program) is still the best place left for exhaustive
