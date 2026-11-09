@@ -35,7 +35,7 @@ end fn main
 
 | Type | Values |
 |---|---|
-| `Int` | 64-bit signed integer, e.g. `0`, `42`, `1_000_000`. Negative: `-5` |
+| `Int` | a whole number of any size (it never overflows), e.g. `0`, `42`, `1_000_000`. Negative: `-5` |
 | `Bool` | `true`, `false` |
 | `String` | text in double quotes, e.g. `"Hello, {name}!"` |
 | `List[T]` | a list of `T`s, e.g. `[1, 2, 3]` is `List[Int]`; `List[List[String]]` nests |
@@ -256,8 +256,8 @@ differ:
 ## Errors
 
 The compiler reports every error at once as `file:line:col: error[code]: message`, with the
-source line and usually a `fix:` line. At run time, integer overflow, division by zero and a list index out of
-range stop the program with `file:line:col: runtime error: ...` (exit code 70).
+source line and usually a `fix:` line. At run time, division by zero, a list index out of range and `repeat`
+with a negative count stop the program with `file:line:col: runtime error: ...` (exit code 70).
 
 ## Running
 

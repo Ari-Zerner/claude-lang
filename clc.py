@@ -133,6 +133,9 @@ class Tok:
         return f"Tok({self.kind},{self.text!r},{self.line}:{self.col})"
 
 
+INT_LIMIT = None  # Int is unbounded (D26); main() sets 2**63 - 1 for the C backend
+
+
 def lex(src, d):
     """One statement per line (D13): every non-empty line ends with an `nl` token."""
     toks = []
@@ -238,8 +241,9 @@ def lex_span(line, i, n, lineno, d, toks, in_interp=False):
                 d.error("bad-number", f"`{text}` is neither a number nor a name (names can't start with a digit)",
                         lineno, col, len(text))
                 digits = "0"
-            elif int(digits) > 2**63 - 1:
-                d.error("int-too-big", f"`{text}` doesn't fit in an Int (64-bit signed)", lineno, col, len(text))
+            elif INT_LIMIT is not None and int(digits) > INT_LIMIT:
+                d.error("int-too-big", f"`{text}` doesn't fit in the C backend's 64-bit Int", lineno, col, len(text),
+                        "the default Lean backend has no limit; drop `--backend c`")
                 digits = "0"
             toks.append(Tok("int", digits, lineno, col))
             i = j
@@ -3058,7 +3062,8 @@ def main(argv=None):
     ap.add_argument("-o", "--output", help="binary to write (build only)")
     ap.add_argument("--emit-c", action="store_true", help="also write the generated C as <output>.c")
     ap.add_argument("--json", action="store_true", help="diagnostics as JSON on stderr")
-    ap.add_argument("--backend", choices=["c", "lean"], default="c", help="code generator (D26: Lean is coming)")
+    ap.add_argument("--backend", choices=["lean", "c"], default="lean",
+                    help="code generator: Lean 4 (D26, the default) or C (faster to build; Int is 64-bit there)")
     ap.add_argument("--emit-lean", action="store_true", help="also write the generated Lean as <output>.lean")
     args = ap.parse_args(argv)
 
@@ -3068,6 +3073,8 @@ def main(argv=None):
     except OSError as ex:
         print(f"clc: can't read {args.file}: {ex.strerror}", file=sys.stderr)
         return 2
+    global INT_LIMIT
+    INT_LIMIT = 2**63 - 1 if args.backend == "c" else None
     d, fns, structs = front_end(args.file, src)
     if d.has_errors() or args.command == "check":
         d.report(args.json)

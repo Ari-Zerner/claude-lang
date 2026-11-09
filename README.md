@@ -23,11 +23,12 @@ end fn main
 ```
 
 ```
-python3 clc.py run examples/gcd.cl      # compile (via C and gcc) and run; the examples run as tests
+python3 clc.py run examples/gcd.cl      # compile (via Lean 4) and run; the examples run as tests
+python3 clc.py test FILE                 # just the examples (~2 s)
 python3 clc.py check FILE [--json]       # diagnostics only
-python3 tests/run.py                     # the compiler's own tests
-python3 clc.py run --backend lean FILE   # the coming Lean 4 backend (DESIGN.md D26; no lists/structs yet)
-python3 tests/run.py --backend lean      # the tests through Lean, skipping what it can't emit yet
+python3 clc.py run --backend c FILE      # the older C backend: builds in ~0.2 s, but Int is 64-bit there
+python3 tests/run.py [--backend c]       # the compiler's own tests
 ```
 
-Needs Python 3 and gcc; the Lean backend needs Lean 4 (`lean` on PATH, with its bundled `leanc`).
+Needs Python 3 and Lean 4 (`lean` on PATH, with its bundled `leanc`); the C backend needs gcc. Lean is the
+default since 2026-11-09 (DESIGN.md D26), so the program that runs is the one contracts will be proved about.

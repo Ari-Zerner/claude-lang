@@ -25,6 +25,7 @@ import tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 CLC = os.path.join(ROOT, "clc.py")
+BACKEND = ["--backend", "c"]  # fast builds for many programs; see trial.py
 sys.path.insert(0, HERE)
 from trial import claude  # noqa: E402
 
@@ -529,7 +530,7 @@ def execute(lang, task, code, args, tmp, doctests=False):
         src = code + f"\nfn main() uses io\n  print({call_cl(task, args)})\nend fn main\n"
         with open(os.path.join(tmp, "prog.cl"), "w") as fh:
             fh.write(src)
-        rc, out, err = run([sys.executable, CLC, "build", "-o", os.path.join(tmp, "prog"), "prog.cl"], tmp, 60)
+        rc, out, err = run([sys.executable, CLC, "build", *BACKEND, "-o", os.path.join(tmp, "prog"), "prog.cl"], tmp, 60)
         if rc != 0:
             return "build-fail", out, err
         rc, out, err = run([os.path.join(tmp, "prog")], tmp)
@@ -561,7 +562,7 @@ def selftest():
                 call_cl(task, args), call_py(task, args)
             with open(os.path.join(tmp, "t.cl"), "w") as fh:
                 fh.write("fn main() uses io\n" + "".join(lines) + "end fn main\n")
-            rc, out, err = run([sys.executable, CLC, "run", "t.cl"], tmp, 60)
+            rc, out, err = run([sys.executable, CLC, "run", *BACKEND, "t.cl"], tmp, 60)
             exp = "".join(want(task, a) + "\n" for a in [task["shown"]] + task["hidden"])
             ok = rc == 0 and out == exp
             bad += not ok

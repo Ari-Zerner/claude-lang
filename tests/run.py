@@ -10,8 +10,8 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CLC = os.path.join(HERE, "..", "clc.py")
-# --backend lean runs everything through the Lean backend (D26); a program it can't emit yet (clc exits 3) is
-# skipped, not failed. Only the files matching an optional name filter run, e.g. `run.py --backend lean gcd`.
+# Tests run on clc's default backend, Lean (D26); `--backend c` runs them on C. A program a backend can't emit
+# (clc exits 3) is skipped, not failed. Only the files matching an optional name filter run, e.g. `run.py --backend lean gcd`.
 argv = sys.argv[1:]
 BACKEND = ["--backend", argv[argv.index("--backend") + 1]] if "--backend" in argv else []
 ONLY = [a for i, a in enumerate(argv) if not a.startswith("--") and (i == 0 or argv[i - 1] != "--backend")]
@@ -20,6 +20,13 @@ failed = passed = skipped = 0
 
 def wanted(f):
     return not ONLY or any(o in os.path.basename(f) for o in ONLY)
+
+
+def backend_ok(f):
+    """A test can name the backends it's for on its first line, e.g. `# backends: lean` (Int past 64 bits)."""
+    m = re.match(r"#\s*backends:\s*(.*)", open(f).readline())
+    name = BACKEND[1] if BACKEND else "lean"
+    return m is None or name in m.group(1).split()
 
 
 def skip(r, what):
@@ -31,7 +38,7 @@ def skip(r, what):
     return False
 
 
-for f in sorted(filter(wanted, glob.glob(os.path.join(HERE, "ok", "*.cl")))):
+for f in sorted(f for f in glob.glob(os.path.join(HERE, "ok", "*.cl")) if wanted(f) and backend_ok(f)):
     r = subprocess.run([sys.executable, CLC, "run", *BACKEND, f], capture_output=True, text=True)
     want = open(f[:-3] + ".out").read()
     if skip(r, os.path.relpath(f, HERE)):

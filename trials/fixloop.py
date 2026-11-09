@@ -21,7 +21,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from trial import CLC, HERE, ROOT, attempt, claude, extract  # noqa: E402
+from trial import BACKEND, CLC, HERE, ROOT, attempt, claude, extract  # noqa: E402
 
 BASES = {
     "gcd": ("Print the greatest common divisor of 48 and 36.", """\
@@ -165,7 +165,7 @@ def compile_errors(code):
         path = os.path.join(tmp, "prog.cl")
         with open(path, "w") as fh:
             fh.write(code)
-        r = subprocess.run([sys.executable, CLC, "test", path], capture_output=True, text=True, cwd=tmp)
+        r = subprocess.run([sys.executable, CLC, "test", *BACKEND, path], capture_output=True, text=True, cwd=tmp)
         return r.returncode, r.stderr.replace(tmp + "/", "")
 
 

@@ -20,6 +20,9 @@ import tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 CLC = os.path.join(ROOT, "clc.py")
+# Trials compile many programs, and a Lean build is ~10x slower on this box (NOTES, night 5 step 5), so they use
+# the C backend until contracts (D26 stage 4) need Lean. Only programs past 64-bit Int can tell them apart.
+BACKEND = ["--backend", "c"]
 
 BASIC = [
     ("fib", "Print the first 15 Fibonacci numbers, starting 0, 1, one per line.",
@@ -223,7 +226,7 @@ def attempt(code, tmp):
     with open(path, "w") as fh:
         fh.write(code)
     # Own process group, so a program that never ends is killed along with clc.
-    p = subprocess.Popen([sys.executable, CLC, "run", path], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    p = subprocess.Popen([sys.executable, CLC, "run", *BACKEND, path], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                          text=True, cwd=tmp, start_new_session=True)
     try:
         out, err = p.communicate(timeout=20)
