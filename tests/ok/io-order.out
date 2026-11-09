@@ -1,0 +1,13 @@
+and:
+false
+  called and-left
+  called and-right2
+false
+or:
+true
+else if:
+  first branch
+while:
+  called while 0
+  called while 1
+  called while 2

@@ -588,6 +588,13 @@ class LeanEmitter:
             if e.op in ("<", "<=", ">", ">="):
                 return f"(decide ({l} {e.op} {r}))"
             if e.op in ("and", "or"):
+                if any(n in self.by_name and self.by_name[n].uses_io for n in calls_in(e.right, set())):
+                    # `(← ...)` would lift the right side's io call to the statement, running it even when the
+                    # left side decides; an inner `do` keeps it under the `if` (`else if` and `while`
+                    # conditions are already lifted to the right place by Lean).
+                    if e.op == "and":
+                        return f"(← if {l} then (do pure {r}) else pure false)"
+                    return f"(← if {l} then pure true else (do pure {r}))"
                 return f"({l} {'&&' if e.op == 'and' else '||'} {r})"
             raise Unsupported(f"the operator `{e.op}` (line {e.tok.line})")
         if k == "call":

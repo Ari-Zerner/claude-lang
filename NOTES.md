@@ -350,7 +350,7 @@ design and its decisions (D1...).
   **D27: `/` and `%` are Euclidean** (`%` never negative), Lean's own and what `omega` handles; the C runtime
   and SPEC.md follow. A build is ~9 s on Lean vs ~0.2 s on C (box under swap), the suite 32 s vs 7 s.
   Known gaps: an io call on the right of `and`/`or` is lifted with `(← ...)` and so runs even when the left
-  side decides; `let _ = pure_call()` may be dropped by Lean's compiler (harmless unless it traps or loops).
+  side decides (fixed in step 4); `let _ = pure_call()` may be dropped by Lean's compiler (harmless unless it traps or loops).
 
 - 2026-11-09 (night 5, step 2): **D26 stage 2a, lists on the Lean backend.** `List[T]` is `Array T`;
   `xs[i]` (`clGet`), `xs[i] = v` (`clSet`) and deeper paths like `grid[i][j] = v` (`clModify` per level, which
@@ -388,6 +388,9 @@ design and its decisions (D1...).
   position from `pat.slots` with `_` for the rest; a `match` whose every arm returns now counts as returning,
   so no dead trap follows it. `trials/backends.py` runs every claude-lang program from the trial results
   (165 distinct) through both backends and compares exit code, stdout and stderr.
+  Then the **io-lifting gap is fixed**: an io call on the right of `and`/`or` now sits under an `if` with an inner
+  `do`, so it runs only when evaluated. Probe first: Lean already places `else if` and `while` condition actions
+  correctly, so only `and`/`or` needed it. `tests/ok/io-order.cl` pins all three on both backends.
 
 ## Next step
 1. **Formal verification** (Ari, 2026-11-07: "we definitely want proofs, not just fuzzing"; see
@@ -410,7 +413,7 @@ design and its decisions (D1...).
      claude-lang to Lean 4.** Stage 1 is done (night 5, step 1: `cl_lean.py`, `--backend lean`).
      Stage 2 is done too (night 5, steps 2-4: lists, structs, enums, Option/Result, match). **Next: stage 3,
      Lean becomes the default** once `trials/backends.py` shows the trial programs agree (fix what differs),
-     the `and`/`or` io-lifting gap is fixed, and the build time is looked at (Lean ~9 s vs C ~0.2 s per
+     and the build time is looked at (Lean ~9 s vs C ~0.2 s per
      program: trials compile a lot; consider `lean` without `-c` for `test`, and whether C stays as a fast
      `--backend c` for the trial harnesses). Then stage 4, contracts.
    - a **change trial** (modify an existing program) is still the best place left for exhaustive
