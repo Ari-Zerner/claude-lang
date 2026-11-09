@@ -334,6 +334,24 @@ design and its decisions (D1...).
   must flow out of the IO), and `implemented_by` needs both functions in `Type` (universe mismatch).
   A contract (`tax` nonnegative) closed with `split`/`omega`, nothing hand-proved.
 
+- 2026-11-09 (night 5, step 1): **D26 stage 1, the Lean backend runs.** `cl_lean.py` (~360 lines) emits Lean 4
+  from the checked AST; `clc.py --backend lean` elaborates it with `lean -c` and links with the bundled `leanc`
+  (found next to the real `lean` binary; it isn't on PATH). Covers Int/Bool/String, functions, `if`/`while`/
+  `for` over numbers (all four forms; reversed counts an offset up from 0 so `continue` needs no step),
+  `print`, interpolation, `length` of a string, and examples. **Examples are `#eval`s that print the C binary's
+  own EXRUN/EXFAIL protocol**, not `#guard`s: `#guard` only says "false", and this way `example_diags` (factored
+  out of `run_examples`) serves both backends, so failing-example messages are byte-identical. A trap inside an
+  example exits `lean` with 70, which maps to `example-crashed` the same way. Functions go out callees first
+  (Tarjan SCCs); recursive groups are `mutual partial def` for now (examples don't count as calls, or every
+  function looked recursive). `clTrap` needs `never_extract`, or a constant trap could be hoisted to start-up.
+  `tests/run.py --backend lean [names]` runs the suite on Lean, skipping what it can't emit yet (clc exits 3):
+  **19 pass, 0 fail, 9 skipped** (lists, structs, enums). New `tests/ok/core.cl` covers stage 1 without lists
+  and prints identically on both backends; a division-by-zero trap matches too (same message, exit 70).
+  **D27: `/` and `%` are Euclidean** (`%` never negative), Lean's own and what `omega` handles; the C runtime
+  and SPEC.md follow. A build is ~9 s on Lean vs ~0.2 s on C (box under swap), the suite 32 s vs 7 s.
+  Known gaps: an io call on the right of `and`/`or` is lifted with `(← ...)` and so runs even when the left
+  side decides; `let _ = pure_call()` may be dropped by Lean's compiler (harmless unless it traps or loops).
+
 ## Next step
 1. **Formal verification** (Ari, 2026-11-07: "we definitely want proofs, not just fuzzing"; see
    DESIGN.md open questions): contracts (`requires`/`ensures`), build-time counterexample search,
@@ -351,15 +369,16 @@ design and its decisions (D1...).
      request (a new command or enum variant, a new pricing rule), then grade on hidden regression
      inputs plus the new behaviour. That's where exhaustive `match` and value semantics should matter,
      if anywhere. Sonnet only once a set separates anything.
-   - the **Lean-direct baseline** is done (night 4, steps 5-6): with a 6-line name note, both models
-     proved all 14 tasks. Ari left the direction to us, and **D26 decides it: compile claude-lang to
-     Lean 4.** Next: **D26 stage 1**, a Lean backend (`clc.py --backend lean`, or a separate
-     `cl_lean.py` module if clc.py gets unwieldy) for Int/Bool/String, functions, `if`/`while`/`for`,
-     `print` and examples (as `#guard`s), run beside C, with `tests/run.py` running both and
-     comparing output. Start from `trials/lean/backend_spike.lean` (the `clTrap` pattern and the
-     build commands). Watch the build time, since trials compile a lot: if lean + leanc stays above
-     ~5 s, try checking examples with `lean` alone and building the binary only to run. Then stages
-     2-5 (DESIGN.md D26).
+   - the **Lean-direct baseline** is done (night 4, steps 5-6), and **D26 decides the direction: compile
+     claude-lang to Lean 4.** Stage 1 is done (night 5, step 1: `cl_lean.py`, `--backend lean`).
+     **Next: stage 2**, starting with lists: `List[T]` -> `Array T`; `xs[i]` and `xs[i] = v` with the index
+     trap (C's message names the length and last valid index; match it); `append` -> `push` (in place when
+     unshared, which Lean does by itself); `repeat`; `length`; `for x in xs` (a snapshot, D19/D21; Lean's
+     `for x in arr` already is one). Printing needs a `clShow` class giving claude-lang's formats (`[1, 2]`,
+     strings quoted inside lists, `Point(x: 1, y: 2)`), and examples on lists use EXFAILV with it. Then
+     structs, enums, `Option`/`Result`, `match`, deeper `set_path` (D23), until `tests/run.py --backend lean`
+     skips nothing; then stage 3 (Lean becomes the default). Also fix the `and`/`or` io-lifting gap above
+     (emit the right side's action under an `if`).
    - a **change trial** (modify an existing program) is still the best place left for exhaustive
      `match` to show, if it shows anywhere (see night 4, step 4).
 2. Maybe `join` / `contains` built-ins (both adventure programs wrote `contains` and a join again).

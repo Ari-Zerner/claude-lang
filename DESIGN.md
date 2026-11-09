@@ -323,6 +323,20 @@ Claude differs from a human programmer in ways that matter for language design:
     a helper function whose `ensures` states the missing fact, which works as a lemma. A raw Lean
     `proof` block is the last resort, and that's where the name-table error layer goes.
 
+- **D27. `/` and `%` are Euclidean: `%` is never negative.** (2026-11-09, night 5, while writing the Lean
+  backend.) `a == b * (a / b) + a % b` with `0 <= a % b < |b|`; for a positive divisor that's Python's `//`
+  and `%` (`-7 / 2` is `-4`, `-7 % 2` is `1`). Before this the spec said C's rule (truncate toward zero, `%`
+  takes the left side's sign). Reasons:
+  - *It removes two quiet bugs* (point 5) that truncation keeps: `n % 2 == 1` is false for negative odd `n`,
+    and `(i - 1) % n` to wrap an index gives `-1` at `i == 0`. Claude writes both, from Python habits.
+  - *It's Lean's own `/` and `%`* (D26), which `omega` reasons about directly. Truncating division
+    (`Int.tdiv`) needs a rewrite lemma first (measured: `omega` fails on `x.tdiv 2 <= x` given `x >= 0`, and
+    proves the same goal for `/`), so contracts on code that divides would need more help.
+  - It differs from floor division (Python) only for a negative divisor, which is rare: `7 / -2` is `-3`
+    and `7 % -2` is `1` (Python: `-4`, `-1`). Division by zero still stops the program (D16).
+  - The C backend follows it (a two-line fix after C's `/`), so both backends agree while D26 is underway.
+    No test or trial depended on the old rule.
+
 ## Open questions
 
 - Memory management: value semantics with copy-on-write (D19); nothing is freed yet.

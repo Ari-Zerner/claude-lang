@@ -2343,11 +2343,15 @@ static int64_t cl_mul(int64_t a, int64_t b, int l, int c) {
 static int64_t cl_div(int64_t a, int64_t b, int l, int c) {
     if (b == 0) cl_trap("division by zero", l, c);
     if (a == INT64_MIN && b == -1) cl_trap("integer overflow in `/`", l, c);
-    return a / b; }
+    int64_t q = a / b;  /* Euclidean (D27): a == b * (a / b) + a % b with 0 <= a % b < |b| */
+    if (a % b < 0) q += b > 0 ? -1 : 1;
+    return q; }
 static int64_t cl_mod(int64_t a, int64_t b, int l, int c) {
     if (b == 0) cl_trap("division by zero in `%`", l, c);
     if (b == -1) return 0;
-    return a % b; }
+    int64_t r = a % b;
+    if (r < 0) r = b > 0 ? r + b : r - b;  /* never negative (D27); r - b can't overflow, since r < 0 */
+    return r; }
 static int64_t cl_neg(int64_t a, int l, int c) {
     if (a == INT64_MIN) cl_trap("integer overflow in `-`", l, c); return -a; }
 static void cl_print_int(int64_t v) { printf("%lld\n", (long long)v); }
@@ -2924,6 +2928,12 @@ def run_examples(exe, em, d):
     except subprocess.TimeoutExpired as te:
         out = te.stdout.decode() if isinstance(te.stdout, bytes) else (te.stdout or "")
         err, timed_out = "", True
+    example_diags(out, err, timed_out, em, d)
+    return len(em.examples)
+
+
+def example_diags(out, err, timed_out, em, d):
+    """Turn the EXRUN/EXFAIL/EXDONE lines either backend prints for its examples into diagnostics."""
     last, done = None, False
     for line in out.splitlines():
         parts = line.split()
@@ -2960,7 +2970,73 @@ def run_examples(exe, em, d):
         else:
             why = err.strip().splitlines()[-1] if err.strip() else "it crashed"
             d.error("example-crashed", f"example stopped the program: {why}", s.tok.line, s.tok.col, 7)
-    return len(em.examples)
+
+
+def lean_tools():
+    """lean and its bundled leanc (which isn't on PATH; it sits next to the real lean binary)."""
+    lean = shutil.which("lean")
+    if lean is None:
+        return None, None
+    return lean, os.path.join(os.path.dirname(os.path.realpath(lean)), "leanc")
+
+
+def lean_main(args, d, fns, structs):
+    """The Lean backend (D26): emit Lean, elaborate it (running the examples), then build with leanc."""
+    import cl_lean
+    try:
+        em = cl_lean.LeanEmitter(fns, structs, args.file)
+        lsrc = em.emit()
+    except cl_lean.Unsupported as ex:
+        print(f"clc: the Lean backend doesn't support {ex} yet", file=sys.stderr)
+        return 3
+    lean, leanc = lean_tools()
+    if lean is None:
+        print("clc: the Lean backend needs `lean` on PATH", file=sys.stderr)
+        return 2
+    tmp = tempfile.mkdtemp(prefix="clc-")
+    keep_tmp = False
+    try:
+        lfile, cfile = os.path.join(tmp, "Main.lean"), os.path.join(tmp, "main.c")
+        with open(lfile, "w") as fh:
+            fh.write(lsrc)
+        if args.command == "build":
+            exe = os.path.abspath(args.output or (args.file[:-3] if args.file.endswith(".cl") else args.file + ".out"))
+        else:
+            exe = os.path.join(tmp, "prog")
+        if args.emit_lean:
+            shutil.copy(lfile, exe + ".lean")
+        try:
+            r = subprocess.run([lean, "-c", cfile, lfile], capture_output=True, text=True, timeout=120, cwd=tmp)
+            out, err, code, timed_out = r.stdout, r.stderr, r.returncode, False
+        except subprocess.TimeoutExpired as te:
+            out = te.stdout.decode() if isinstance(te.stdout, bytes) else (te.stdout or "")
+            err, code, timed_out = "", None, True
+        lean_errors = [ln for ln in out.splitlines() if ln.startswith(lfile + ":") and ": error" in ln]
+        if lean_errors or (code not in (0, 70) and not timed_out):
+            keep_tmp = True
+            shown = "\n".join(ln for ln in out.splitlines() if not ln.startswith("EX"))
+            print(f"clc: internal error: the generated Lean didn't check (this is a compiler bug). "
+                  f"Lean kept at {lfile}\n{shown[:4000]}{err[:2000]}", file=sys.stderr)
+            return 2
+        example_diags(out, err, timed_out, em, d)
+        if not d.has_errors() and args.command in ("build", "run"):
+            r = subprocess.run([leanc, cfile, "-O1", "-o", exe], capture_output=True, text=True)
+            if r.returncode != 0:
+                keep_tmp = True
+                print(f"clc: internal error: leanc failed (this is a compiler bug). C kept at {cfile}\n"
+                      f"{r.stderr[:4000]}", file=sys.stderr)
+                return 2
+        d.report(args.json)
+        if d.has_errors():
+            return 1
+        if args.command == "test" and not args.json:
+            print(f"{len(em.examples)} example(s) passed", file=sys.stderr)
+        if args.command == "run":
+            return subprocess.run([exe]).returncode
+        return 0
+    finally:
+        if not keep_tmp:
+            shutil.rmtree(tmp, ignore_errors=True)
 
 
 def main(argv=None):
@@ -2970,6 +3046,8 @@ def main(argv=None):
     ap.add_argument("-o", "--output", help="binary to write (build only)")
     ap.add_argument("--emit-c", action="store_true", help="also write the generated C as <output>.c")
     ap.add_argument("--json", action="store_true", help="diagnostics as JSON on stderr")
+    ap.add_argument("--backend", choices=["c", "lean"], default="c", help="code generator (D26: Lean is coming)")
+    ap.add_argument("--emit-lean", action="store_true", help="also write the generated Lean as <output>.lean")
     args = ap.parse_args(argv)
 
     try:
@@ -2983,6 +3061,8 @@ def main(argv=None):
         d.report(args.json)
         return 1 if d.has_errors() else 0
 
+    if args.backend == "lean":
+        return lean_main(args, d, fns, structs)
     em = Emitter(fns, structs, args.file)
     csrc = em.emit()
     tmp = tempfile.mkdtemp(prefix="clc-")

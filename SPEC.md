@@ -238,7 +238,7 @@ A variable declared inside a block is visible only in that block.
 
 | Operators | Operands -> result |
 |---|---|
-| `+ - * / %` | `Int` -> `Int`. `/` truncates toward zero; `%` has the sign of the left side |
+| `+ - * / %` | `Int` -> `Int`. `%` is never negative and `a == b * (a / b) + a % b`, so for `b > 0`, `/` rounds down: `-7 / 2` is `-4`, `-7 % 2` is `1` |
 | `< <= > >=` | `Int` -> `Bool` |
 | `== !=` | two values of the same type -> `Bool` |
 | `and or not` | `Bool` -> `Bool` (short-circuit) |

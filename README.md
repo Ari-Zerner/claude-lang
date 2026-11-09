@@ -26,6 +26,8 @@ end fn main
 python3 clc.py run examples/gcd.cl      # compile (via C and gcc) and run; the examples run as tests
 python3 clc.py check FILE [--json]       # diagnostics only
 python3 tests/run.py                     # the compiler's own tests
+python3 clc.py run --backend lean FILE   # the coming Lean 4 backend (DESIGN.md D26; no lists/structs yet)
+python3 tests/run.py --backend lean      # the tests through Lean, skipping what it can't emit yet
 ```
 
-Needs Python 3 and gcc.
+Needs Python 3 and gcc; the Lean backend needs Lean 4 (`lean` on PATH, with its bundled `leanc`).
