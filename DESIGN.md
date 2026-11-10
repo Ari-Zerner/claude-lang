@@ -366,8 +366,12 @@ Claude differs from a human programmer in ways that matter for language design:
     `p` in the body (its base case) and a call passing it something smaller; `q - p` needs a comparison of the
     two; `natAbs` needs an argument made with `%` or `/`. That took the test file's ten groups from 39
     candidates (8 s CPU) to 12 (3 s), with the same results.
+  - *Results are cached* by the probe's text (`~/.cache/clc/probe/`), so a rebuild of unchanged functions
+    and types costs nothing extra.
+  - *Recursion is rare in what Claude writes:* 6 of the 127 trial programs. D28 gets 5 of their 8 groups total
+    and is right about 2 of the 3 partial ones. Loops are the common case, so they matter more for stage 4.
   - *Not yet:* lexicographic measures (Ackermann), mutual recursion beyond structural or one shared `Int`
-    parameter, recursion inside a `while` body. Those stay `partial`.
+    parameter, a sign flip (`f(-n)` for negative `n`), recursion inside a `while` body. Those stay `partial`.
 
 ## Open questions
 

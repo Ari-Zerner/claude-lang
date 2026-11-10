@@ -2984,6 +2984,38 @@ def lean_tools():
     return lean, os.path.join(os.path.dirname(os.path.realpath(lean)), "leanc")
 
 
+def probe_lean(lean, psrc, tmp):
+    """Elaborate D28's termination probe and return the `#print axioms` lines, which are all `read_probe` needs.
+    They're cached by the probe's text and the Lean install (`~/.cache/clc/probe/`), so rebuilding a program
+    whose functions and types haven't changed skips the probe (~1-3 s CPU). A timeout isn't cached: everything
+    stays partial for that build."""
+    import hashlib
+    key = hashlib.sha256((os.path.realpath(lean) + "\0" + psrc).encode()).hexdigest()
+    cache = os.path.join(os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache"), "clc", "probe")
+    path = os.path.join(cache, key + ".txt")
+    try:
+        with open(path) as fh:
+            return fh.read()
+    except OSError:
+        pass
+    pfile = os.path.join(tmp, "Probe.lean")
+    with open(pfile, "w") as fh:
+        fh.write(psrc)
+    try:
+        r = subprocess.run([lean, pfile], capture_output=True, text=True, timeout=120, cwd=tmp)
+    except subprocess.TimeoutExpired:
+        return ""
+    found = "".join(ln + "\n" for ln in r.stdout.splitlines() if ln.startswith("'"))
+    try:
+        os.makedirs(cache, exist_ok=True)
+        with open(path + ".tmp", "w") as fh:
+            fh.write(found)
+        os.replace(path + ".tmp", path)
+    except OSError:
+        pass  # no cache this time
+    return found
+
+
 def lean_main(args, d, fns, structs):
     """The Lean backend (D26): emit Lean, elaborate it (running the examples), then build with leanc."""
     import cl_lean
@@ -3004,14 +3036,8 @@ def lean_main(args, d, fns, structs):
         if em.recursive_fns:
             # D28: which recursive functions can Lean prove stop, and with which measure? One extra elaboration,
             # since trying candidates inside one file would need `import Lean` (40-60 s here).
-            pfile = os.path.join(tmp, "Probe.lean")
-            with open(pfile, "w") as fh:
-                fh.write(em.emit(probe=True))
-            try:
-                r = subprocess.run([lean, pfile], capture_output=True, text=True, timeout=120, cwd=tmp)
-                em.read_probe(r.stdout)
-            except subprocess.TimeoutExpired:
-                pass  # everything stays partial
+            psrc = em.emit(probe=True)
+            em.read_probe(probe_lean(lean, psrc, tmp))
             lsrc = em.emit()
         with open(lfile, "w") as fh:
             fh.write(lsrc)

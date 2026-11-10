@@ -451,6 +451,20 @@ design and its decisions (D1...).
   `natAbs` needs an argument made with `%` or `/`; the tactic-assisted structural candidate needs a changed
   struct parameter with size lemmas, or a list. gcd's probe is ~1.2 s CPU.
 
+- 2026-11-10 (night 6, step 3): **D28 probe results are cached, and the corpus agrees.** `clc.py probe_lean`
+  keeps the probe's `#print axioms` lines in `~/.cache/clc/probe/<sha256 of lean path + probe text>.txt`, so
+  rebuilding an unchanged program skips the probe (recursion.cl `test`: 5.9 s CPU cold, 2.8 s warm); a timeout
+  isn't cached. **Lean suite 31/31** with pruning and cache. `trials/backends.py --recursive` keeps only
+  programs with recursion and says what D28 made of each group (report
+  `trials/results/2026-11-10-1207-backends.md`). **Only 6 of the corpus's 127 programs recurse at all**
+  (Claude writes loops), all 6 behave the same on both backends, and D28 makes 5 groups total (gcd, two
+  trees' sum and depth) and 3 partial: Haiku's even/odd (base case `n == 0`, correctly), coins' `ways`
+  (negative `kind` never stops, correctly), and **one miss**: Sonnet's even/odd sends a negative `n` to
+  `is_even(-n)`, so it always stops, but the measure needs the sign (`2 * |n| + (1 if n < 0)`); no candidate
+  covers a call passing `-p` yet. **So for stage 4 the bigger job is loops, not recursion**: `while` and `for`
+  are what Claude writes, and proving anything about a function with a `while` needs it as a total
+  definition too (Lean's `while` is `partial` inside).
+
 ## Next step
 1. **Formal verification** (Ari, 2026-11-07: "we definitely want proofs, not just fuzzing"; see
    DESIGN.md open questions): contracts (`requires`/`ensures`), build-time counterexample search,
@@ -473,8 +487,8 @@ design and its decisions (D1...).
      Stage 2 is done too (night 5, steps 2-4: lists, structs, enums, Option/Result, match). **Next: stage 3,
      Lean becomes the default.** Done (night 5, step 6); C stays as `--backend c` for the trial harnesses.
      **Next: stage 4, contracts**, the point of D26. Bite-sized order: (a) recursive functions as real `def`s,
-     not `partial def` (**D28, built night 6 step 2**; left: a cache of probe results keyed by the probe's hash,
-     so rebuilding an unchanged program skips the probe, and the corpus check on Lean for regressions); `while` loops are a separate problem (Lean's `while` is `partial` inside;
+     not `partial def` (**D28, built night 6 steps 2-3**, with a probe cache; small gap: a sign-flipping call
+     `f(-n)` needs a `2 * |n| + (1 if n < 0)` candidate); `while` loops are a separate problem (Lean's `while` is `partial` inside;
      loops that need proofs may have to become `for` or recursion, or use `Loop` specs). (b) Syntax:
      `requires <Bool expr>` / `ensures <Bool expr>` lines next to `example` (with `result` naming the return
      value), checked at run time first (a failed `requires` is the caller's error at the call's line, a failed
