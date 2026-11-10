@@ -434,6 +434,23 @@ design and its decisions (D1...).
   command needs `import Lean`, measured at 40-60 s per build here** (1.4 s with only Init), so D28 picks
   measures with a separate probe elaboration instead, read through `#print axioms` (`sorryAx` = failed).
 
+- 2026-11-10 (night 6, step 2): **D28 built: recursive functions are total `def`s when clc finds a measure.**
+  `cl_lean.py`: a recursive group gets candidates from its parameters (`candidates`), `emit(probe=True)` writes
+  the probe (each candidate as `clT<i>_<name>` plus `#print axioms`), `read_probe` keeps the first candidate
+  with no `sorryAx`; `clc.py lean_main` runs the probe only when some function is recursive. The real file
+  says `-- terminates (D28), measure ...` or `-- partial: ...` above each recursive group. New
+  `tests/ok/recursion.cl` (fact, fib, count-up sum, binary search, index walk, tree through a list field, enum
+  eval, mutual even/odd, an io countdown: all total; `down` with base case `n == 0`: partial) has `# total:` /
+  `# partial:` lines that `tests/run.py` checks against the generated Lean (it builds with `--emit-lean`
+  instead of `run`; a wrong line fails, checked). Existing tests: gcd and enums' eval and structs' tree total;
+  core's even/odd partial, correctly (base case `n == 0`). **Lean suite 31/31** (run before the pruning below;
+  the five recursive tests pass after it), `recursion` passes on C too. **Probe cost:** recursion.cl's ten
+  groups at first had 39 candidates, 8 s CPU (failed `grind` attempts, not their diagnostics: `-verbose` saved
+  ~10%); pruned with syntax to 12 (3 fail), **3.1 s CPU**: a measure on `p` needs `p` compared in the body
+  and some call passing it something smaller; `q - p` needs the two compared and `p` going up or `q` down;
+  `natAbs` needs an argument made with `%` or `/`; the tactic-assisted structural candidate needs a changed
+  struct parameter with size lemmas, or a list. gcd's probe is ~1.2 s CPU.
+
 ## Next step
 1. **Formal verification** (Ari, 2026-11-07: "we definitely want proofs, not just fuzzing"; see
    DESIGN.md open questions): contracts (`requires`/`ensures`), build-time counterexample search,
@@ -456,13 +473,8 @@ design and its decisions (D1...).
      Stage 2 is done too (night 5, steps 2-4: lists, structs, enums, Option/Result, match). **Next: stage 3,
      Lean becomes the default.** Done (night 5, step 6); C stays as `--backend c` for the trial harnesses.
      **Next: stage 4, contracts**, the point of D26. Bite-sized order: (a) recursive functions as real `def`s,
-     not `partial def` (**D28; probe done night 6 step 1, build it next**: in `cl_lean.py`, a recursive SCC gets
-     candidate measures from its parameter types, a probe file (types + functions + each candidate renamed,
-     e.g. `f_gcd__t2`, self-calls renamed too, then `#print axioms` for each) is elaborated first by
-     `clc.py lean_main` when any SCC is recursive, and the real file uses the first candidate without
-     `sorryAx`, else `partial`; prelude gains `clMod_bound`, struct-size lemmas are generated per struct field
-     of list/struct type; `--emit-lean` comments say which measure or `partial`; tests: fact/fib/gcd/tree/eval
-     total, `n == 0` partial; a cache of probe results by hash is optional); `while` loops are a separate problem (Lean's `while` is `partial` inside;
+     not `partial def` (**D28, built night 6 step 2**; left: a cache of probe results keyed by the probe's hash,
+     so rebuilding an unchanged program skips the probe, and the corpus check on Lean for regressions); `while` loops are a separate problem (Lean's `while` is `partial` inside;
      loops that need proofs may have to become `for` or recursion, or use `Loop` specs). (b) Syntax:
      `requires <Bool expr>` / `ensures <Bool expr>` lines next to `example` (with `result` naming the return
      value), checked at run time first (a failed `requires` is the caller's error at the call's line, a failed

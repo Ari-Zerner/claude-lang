@@ -38,12 +38,40 @@ def skip(r, what):
     return False
 
 
+def termination(f, tmp):
+    """`# total: a b` and `# partial: c` lines (D28) must match what the generated Lean says about each
+    recursive function. Builds f into tmp; returns (binary, problems) or None when f has no such lines."""
+    src = open(f).read()
+    total = " ".join(re.findall(r"^#\s*total:(.*)$", src, re.M)).split()
+    partial = " ".join(re.findall(r"^#\s*partial:(.*)$", src, re.M)).split()
+    if not (total or partial) or (BACKEND and BACKEND[1] != "lean"):
+        return None
+    exe = os.path.join(tmp, "prog")
+    subprocess.run([sys.executable, CLC, "build", "--emit-lean", "-o", exe, f], capture_output=True, text=True)
+    lean = open(exe + ".lean").read() if os.path.exists(exe + ".lean") else ""
+    said_total = set(re.findall(r"(\w+): ", " ".join(re.findall(r"^-- terminates \(D28\), measure (.*)$", lean, re.M))))
+    said_partial = set(" ".join(re.findall(r"^-- partial: clc found no reason (.*) must stop", lean, re.M))
+                       .replace(" and ", " ").split())
+    problems = [f"{n} should be total" for n in total if n not in said_total]
+    problems += [f"{n} should be partial" for n in partial if n not in said_partial]
+    return exe, problems
+
+
+import tempfile
 for f in sorted(f for f in glob.glob(os.path.join(HERE, "ok", "*.cl")) if wanted(f) and backend_ok(f)):
-    r = subprocess.run([sys.executable, CLC, "run", *BACKEND, f], capture_output=True, text=True)
+    with tempfile.TemporaryDirectory() as tmp:
+        term = termination(f, tmp)
+        if term:
+            r = subprocess.run([term[0]], capture_output=True, text=True)
+        else:
+            r = subprocess.run([sys.executable, CLC, "run", *BACKEND, f], capture_output=True, text=True)
     want = open(f[:-3] + ".out").read()
     if skip(r, os.path.relpath(f, HERE)):
         continue
-    if r.returncode == 0 and r.stdout == want:
+    if term and term[1]:
+        failed += 1
+        print(f"FAIL {os.path.relpath(f, HERE)}: {'; '.join(term[1])}")
+    elif r.returncode == 0 and r.stdout == want:
         passed += 1
     else:
         failed += 1

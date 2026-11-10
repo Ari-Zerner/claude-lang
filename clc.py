@@ -3001,6 +3001,18 @@ def lean_main(args, d, fns, structs):
     keep_tmp = False
     try:
         lfile, cfile = os.path.join(tmp, "Main.lean"), os.path.join(tmp, "main.c")
+        if em.recursive_fns:
+            # D28: which recursive functions can Lean prove stop, and with which measure? One extra elaboration,
+            # since trying candidates inside one file would need `import Lean` (40-60 s here).
+            pfile = os.path.join(tmp, "Probe.lean")
+            with open(pfile, "w") as fh:
+                fh.write(em.emit(probe=True))
+            try:
+                r = subprocess.run([lean, pfile], capture_output=True, text=True, timeout=120, cwd=tmp)
+                em.read_probe(r.stdout)
+            except subprocess.TimeoutExpired:
+                pass  # everything stays partial
+            lsrc = em.emit()
         with open(lfile, "w") as fh:
             fh.write(lsrc)
         if args.command == "build":

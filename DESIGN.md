@@ -342,7 +342,7 @@ Claude differs from a human programmer in ways that matter for language design:
     No test or trial depended on the old rule.
 
 - **D28. A recursive function is a total `def` when the compiler can find why it stops, else `partial`.**
-  (2026-11-10, night 6; decided, being built.) Only a total `def` can be proved about (D26 stage 4): Lean treats
+  (2026-11-10, night 6; built.) Only a total `def` can be proved about (D26 stage 4): Lean treats
   a `partial def` as an opaque constant, so no contract on it, or on its callers, can be proved through it.
   - *Lean can't find measures over `Int` by itself.* Its search (GuessLex) tries only `sizeOf` of each
     parameter, which never decreases for `n - 1` on an `Int`. Structural recursion (enums like `Expr`) it
@@ -362,8 +362,12 @@ Claude differs from a human programmer in ways that matter for language design:
   - *A function that may not stop stays runnable.* `partial` is the honest answer for `f(n)` with base case
     `n == 0` (negative `n` never stops), and the probe gets it right (measured). It matters once the
     function has a contract: then clc can say the proof needs a reason it stops.
-  - *Not yet:* lexicographic measures (Ackermann), mutual recursion beyond structural, recursion inside a
-    `while` body. Those stay `partial`.
+  - *Only plausible candidates*, since each failed proof costs ~0.2 s: a measure on `p` needs a comparison of
+    `p` in the body (its base case) and a call passing it something smaller; `q - p` needs a comparison of the
+    two; `natAbs` needs an argument made with `%` or `/`. That took the test file's ten groups from 39
+    candidates (8 s CPU) to 12 (3 s), with the same results.
+  - *Not yet:* lexicographic measures (Ackermann), mutual recursion beyond structural or one shared `Int`
+    parameter, recursion inside a `while` body. Those stay `partial`.
 
 ## Open questions
 
