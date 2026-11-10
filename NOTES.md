@@ -465,6 +465,20 @@ design and its decisions (D1...).
   are what Claude writes, and proving anything about a function with a `while` needs it as a total
   definition too (Lean's `while` is `partial` inside).
 
+- 2026-11-10 (night 6, step 4): **D29: `requires`/`ensures`, checked at run time (stage 4(b)).** Parser and
+  checker in `clc.py` (keywords `requires`/`ensures`, `HEADER_KINDS`, `in_contract`; new codes
+  `contract-placement`, `contract-unit`, `contract-effect`, `contract-main`; the checker stores each contract's
+  text on its node as `s.text`); Lean in `cl_lean.py` (`function` wraps the body in one `if` per `requires`
+  and takes `cl_loc`; `call` passes the call's location; `ensure_return`; `call_text` formats `f(a: 1)`).
+  `down(n)` with `requires n >= 0` is now total (D28 sees the hypothesis). **Fixed on the way:** on Lean an
+  example that stopped the program was blamed on the example before it, with no message ("it crashed"):
+  `#eval` captures stdout/stderr and Lean evaluated the example's values before `EXRUN`. Now examples are
+  thunks to `@[noinline]` `clExShow`/`clExBool`, and `EXRUN` and trap messages are written through
+  `clRealOut` to `/dev/stdout`/`/dev/stderr`; a division by zero in an example now reads exactly as on C.
+  Tests: `tests/ok/contracts.cl` (isqrt, down, count_digits, a struct parameter, clamp, an io function;
+  `# total: down count_digits`), `tests/err/contracts.cl` (the six checker errors),
+  `tests/err/contracts-run.cl` (a `requires` broken by an example). SPEC.md documents contracts (2.1k words). **Lean 34/34, C 31/31 + 1 skipped** (contracts need Lean).
+
 ## Next step
 1. **Formal verification** (Ari, 2026-11-07: "we definitely want proofs, not just fuzzing"; see
    DESIGN.md open questions): contracts (`requires`/`ensures`), build-time counterexample search,
@@ -489,10 +503,8 @@ design and its decisions (D1...).
      **Next: stage 4, contracts**, the point of D26. Bite-sized order: (a) recursive functions as real `def`s,
      not `partial def` (**D28, built night 6 steps 2-3**, with a probe cache; small gap: a sign-flipping call
      `f(-n)` needs a `2 * |n| + (1 if n < 0)` candidate); `while` loops are a separate problem (Lean's `while` is `partial` inside;
-     loops that need proofs may have to become `for` or recursion, or use `Loop` specs). (b) Syntax:
-     `requires <Bool expr>` / `ensures <Bool expr>` lines next to `example` (with `result` naming the return
-     value), checked at run time first (a failed `requires` is the caller's error at the call's line, a failed
-     `ensures` the function's). (c) Proofs: emit `theorem f_spec : requires -> ensures` and try `by unfold;
+     loops that need proofs may have to become `for` or recursion, or use `Loop` specs). (b) contracts checked
+     at run time: **done, D29 (night 6 step 4)**. (c) Proofs, **next**: emit `theorem f_spec : requires -> ensures` and try `by unfold;
      omega`, `simp`, `grind`, `decide`; report an unproved goal at the claude-lang line, in claude-lang terms.
      Optional anytime: a precompiled prelude module (saves ~40% of the C compile).
    - a **change trial** (modify an existing program) is still the best place left for exhaustive

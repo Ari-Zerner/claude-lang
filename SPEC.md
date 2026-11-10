@@ -172,6 +172,8 @@ end fn find
 
 ```
 fn name(param: Type, other: Type) -> ReturnType uses io
+  requires ...
+  ensures ...
   example ...
   body
 end fn name
@@ -186,6 +188,24 @@ end fn name
   expression, usually `f(...) == expected`. The compiler runs every example on every build, and
   a false one is a compile error. Examples can't see parameters or call `uses io` functions;
   write the values out. Calls in examples name their arguments like any other call.
+- **`requires` and `ensures` lines** (contracts) go there too, in any order with the examples.
+  Each is a `Bool` expression over the parameters, and no `uses io` calls. `requires n >= 0` says
+  what callers must pass; a call that breaks it stops the program at the call. `ensures` says what
+  the function returns, with `result` naming the value: `ensures result >= 0`. A `return` that
+  breaks it stops the program at that `return`. A function that returns nothing has no `ensures`.
+
+  ```
+  fn isqrt(n: Int) -> Int
+    requires n >= 0
+    ensures result * result <= n and (result + 1) * (result + 1) > n
+    example isqrt(10) == 3
+    var r = 0
+    while (r + 1) * (r + 1) <= n
+      r = r + 1
+    end while
+    return r
+  end fn isqrt
+  ```
 
 ## Calls
 
@@ -256,8 +276,8 @@ differ:
 ## Errors
 
 The compiler reports every error at once as `file:line:col: error[code]: message`, with the
-source line and usually a `fix:` line. At run time, division by zero, a list index out of range and `repeat`
-with a negative count stop the program with `file:line:col: runtime error: ...` (exit code 70).
+source line and usually a `fix:` line. At run time, division by zero, a list index out of range, `repeat`
+with a negative count and a broken `requires` or `ensures` stop the program with `file:line:col: runtime error: ...` (exit code 70).
 
 ## Running
 

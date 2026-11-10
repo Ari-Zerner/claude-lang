@@ -373,6 +373,33 @@ Claude differs from a human programmer in ways that matter for language design:
   - *Not yet:* lexicographic measures (Ackermann), mutual recursion beyond structural or one shared `Int`
     parameter, a sign flip (`f(-n)` for negative `n`), recursion inside a `while` body. Those stay `partial`.
 
+- **D29. Contracts: `requires` and `ensures` lines beside the examples, checked at run time.** (2026-11-10,
+  night 6; built. Stage 4(b) of D26; proving them is 4(c).)
+  - *Syntax:* `requires <Bool>` over the parameters, `ensures <Bool>` over the parameters and `result`, between
+    the `fn` line and the body in any order with `example`s; no io. `result` is a name only inside `ensures`
+    (a parameter can't be called `result` there), so the many programs with a `var result` keep working.
+    `ensures` on a function that returns nothing is an error: parameters can't change, so there's nothing to
+    say. `main` can't have contracts.
+  - *A broken `requires` is the caller's mistake, so it's reported at the call:* `file:15:11: runtime error:
+    this call breaks `requires n >= 0` of fn down (line 14): down(n: -1)`, with every argument's value. In
+    Lean, a function with a `requires` takes the caller's location as a first argument, and each `requires`
+    wraps the body, `if cond then <body> else trap`. One check per call, in one place, and inside the body
+    the condition is a hypothesis: a termination proof can use it (`down(n)` with base case `n == 0` is
+    `partial` alone and total with `requires n >= 0`), and so will stage 4(c)'s proofs.
+  - *A broken `ensures` is the function's mistake, so it's reported at the `return` that broke it:*
+    `bad_abs(x: -7) returned -7, which breaks `ensures result >= 0` (line 23)`. Each `return e` becomes
+    `let cl_result := e`, a check per `ensures`, `return cl_result`.
+  - *Examples go through the same calls,* so an example that breaks a `requires` is `example-crashed` with
+    that message. (Found while testing: on Lean, an example that stopped the program was blamed on the one
+    before it, with no message, because `#eval` captures output and evaluated the example's values before
+    printing `EXRUN`. Examples are now thunks and `EXRUN` and trap messages go straight to the real
+    stdout/stderr.)
+  - *C backend:* refuses contracts (exit 3, "drop `--backend c`"), since C is only kept for the trial
+    harnesses' fast builds and retires with stage 4.
+  - *Not yet:* contracts that call back into their own function's group (Unsupported), loop `invariant`s,
+    `old(...)`-style state (nothing is mutable across a call, so not needed yet), long argument values in
+    messages aren't shortened.
+
 ## Open questions
 
 - Memory management: value semantics with copy-on-write (D19); nothing is freed yet.

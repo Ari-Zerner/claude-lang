@@ -96,7 +96,8 @@ class Diags:
 # ------------------------------------------------------------------ lexer
 
 KEYWORDS = {"fn", "end", "if", "else", "while", "for", "break", "continue", "return", "let", "var", "example",
-            "uses", "true", "false", "and", "or", "not", "struct", "enum", "match", "case"}
+            "requires", "ensures", "uses", "true", "false", "and", "or", "not", "struct", "enum", "match", "case"}
+HEADER_KINDS = ("example", "requires", "ensures")  # lines between `fn` and the body (D8, D29)
 BLOCK_KINDS = ("fn", "if", "while", "for", "struct", "enum", "match")
 NAMED_BLOCKS = ("fn", "struct", "enum")
 RANGE_FIX = "`a until b` stops before b, `a through b` includes it: `for i in 0 until n`"
@@ -942,11 +943,11 @@ class Parser:
                 self.next()
                 self.end_line()
                 return Node(w, t)
-            if w == "example":
+            if w in ("example", "requires", "ensures"):  # D8, D29
                 self.next()
                 e = self.expr()
                 self.end_line()
-                return Node("example", t, expr=e)
+                return Node(w, t, expr=e)
         if t.kind == "name":
             if t.text in STMT_HINTS:
                 fix = None
@@ -1414,6 +1415,7 @@ class Checker:
     def __init__(self, fns, structs, d):
         self.d, self.fns, self.all = d, {}, fns
         self.in_example = False
+        self.in_contract = None
         self.structs, self.enums, self.variants = {}, {}, {}
         enums = [st for st in structs if st.kind == "enum"]
         structs = [st for st in structs if st.kind != "enum"]
@@ -1536,11 +1538,23 @@ class Checker:
             self.scopes[0][pn] = Var(pt, False, ptok.line, param=True)
         seen_body = False
         for s in f.body:
-            if s.kind != "example":
+            if s.kind not in HEADER_KINDS:
                 seen_body = True
             elif seen_body:
-                self.err("example-placement", "`example` lines go right after the `fn` line, before the body",
-                         s.tok)
+                self.err(f"{'example' if s.kind == 'example' else 'contract'}-placement",
+                         f"`{s.kind}` lines go right after the `fn` line, before the body", s.tok)
+            if s.kind in ("requires", "ensures") and f.name == "main":
+                self.err("contract-main", f"`main` can't have `{s.kind}`: nothing calls it", s.tok)
+        if f.ret in ("Unit", None):
+            for s in f.body:
+                if s.kind == "ensures":
+                    self.err("contract-unit", f"`fn {f.name}` returns nothing, so `ensures` has no `result` to "
+                             "talk about (and parameters can't change)", s.tok,
+                             "check it with `requires`, or return a value")
+        for pn, _, ptok in f.params:
+            if pn == "result" and any(s.kind == "ensures" for s in f.body):
+                self.err("reserved-name", "`result` names the return value in `ensures`, so a parameter can't "
+                         "be called that here", ptok)
         self.block(f.body, new_scope=False)
         if f.ret not in ("Unit", None) and not returns(f.body):
             self.err("missing-return", f"`fn {f.name}` returns {f.ret}, but some path reaches `end fn` "
@@ -1581,7 +1595,20 @@ class Checker:
 
     def stmt(self, s):
         k = s.kind
-        if k == "example":
+        if k in ("requires", "ensures"):
+            # D29: parameters are in scope, and `result` (the return value) in `ensures`; no io.
+            self.scopes.append({})
+            if k == "ensures" and self.cur.ret not in ("Unit", None):
+                self.scopes[-1]["result"] = Var(self.cur.ret, False, s.tok.line)
+            self.in_contract = k
+            s.text = render(s.expr)
+            t = self.expr(s.expr)
+            self.in_contract = None
+            self.scopes.pop()
+            if t not in (None, "Bool"):
+                self.err_at("not-bool", f"a `{k}` line must be a Bool expression, e.g. "
+                            f"`{'requires n >= 0' if k == 'requires' else 'ensures result >= 0'}`", s.expr)
+        elif k == "example":
             saved, self.scopes, self.in_example = self.scopes, [{}], True
             t = self.expr(s.expr)
             self.scopes, self.in_example = saved, False
@@ -2281,6 +2308,8 @@ class Checker:
             return
         if self.in_example:
             self.err("example-effect", f"examples can't call `{name}`, which uses io", e.tok)
+        elif self.in_contract:
+            self.err("contract-effect", f"`{self.in_contract}` lines can't call `{name}`, which uses io", e.tok)
         elif not self.cur.uses_io:
             self.err("missing-effect", f"`{name}` uses io, so `fn {self.cur.name}` must declare `uses io` too",
                      e.tok, f"`{sig(self.cur, uses_io=True)}`")
@@ -3120,6 +3149,9 @@ def main(argv=None):
 
     if args.backend == "lean":
         return lean_main(args, d, fns, structs)
+    if any(s.kind in ("requires", "ensures") for f in fns for s in f.body):
+        print("clc: the C backend doesn't support `requires`/`ensures` (D29); drop `--backend c`", file=sys.stderr)
+        return 3
     em = Emitter(fns, structs, args.file)
     csrc = em.emit()
     tmp = tempfile.mkdtemp(prefix="clc-")
