@@ -527,7 +527,7 @@ design and its decisions (D1...).
      with the path condition or a model where traps are visible (D31 says why); (2) a counterexample for an unproved `ensures` (Lean's `plausible`? not in
      core; or clc evaluates the function on small inputs with the examples' machinery); (3) loops: `for` over
      ranges first, with `invariant` lines, likely by emitting the loop as a local recursive function; then
-     `while` with a `decreases` measure; (4) a `grind` heartbeat cap that degrades to `sorry`.
+     `while` with a `decreases` measure; (4) a `grind` heartbeat cap that degrades to the `clUnproved` axiom (a timeout is an error today).
      Optional anytime: a precompiled prelude module (saves ~40% of the C compile).
    - a **change trial** (modify an existing program) is still the best place left for exhaustive
      `match` to show, if it shows anywhere (see night 4, step 4).
