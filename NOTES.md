@@ -484,9 +484,17 @@ design and its decisions (D1...).
   says which were proved; `clc.py` turns the rest into `unproved` warnings with a reason, and `clc test` says
   "N of M `ensures` proved". `cl_lean.py`: `spec_theorems` (emitted after the functions, before the examples)
   and `read_specs`. `tests/ok/contracts.cl` now proves 4 of 8: clamp, width, count_digits (by induction),
-  down; unproved, as listed in its new `# unproved: 16 17 70 83` line that `tests/run.py` checks against
-  `clc test --json` (a wrong list fails, checked): isqrt's two (`while`), wrong_abs (false for x < -5, which
+  down; unproved, as its `# unproved` marks say (checked by `tests/run.py` against `clc test --json`; a wrong
+  mark fails, checked): isqrt's two (`while`), wrong_abs (false for x < -5, which
   no example reaches), spin (partial). `clc test tests/ok/contracts.cl` ~2.7 s CPU. **Lean 34/34, C 31/31 + 1 skipped.**
+
+- 2026-11-10 (night 6, step 6): **D31: modular proofs.** Each spec theorem gets a `grind_pattern` on the call
+  (the default trigger was the whole `decide (...)`, which no caller contains), so callers' proofs get callees'
+  `ensures`; an unproved theorem is closed by its own axiom `clUnproved_f_j` instead of `sorry`, so `read_specs`
+  can say "it follows from fn g's `ensures ...` (line N), which isn't proved". `tests/ok/contracts.cl`: 5 of 10
+  proved, new `digits_plus` (from count_digits's `ensures`, proved) and `double_abs` (follows from wrong_abs's,
+  unproved). The test now marks unproved `ensures` inline (`ensures ...  # unproved`) instead of a line-number
+  list, which broke the moment a comment line was added. **Lean 34/34** (contracts re-run after the marker change), **C 31/31 + 1 skipped.**
 
 ## Next step
 1. **Formal verification** (Ari, 2026-11-07: "we definitely want proofs, not just fuzzing"; see
@@ -515,10 +523,8 @@ design and its decisions (D1...).
      loops that need proofs may have to become `for` or recursion, or use `Loop` specs). (b) contracts checked
      at run time: **done, D29 (night 6 step 4)**. (c) Proofs: **started, D30 (night 6 step 5)**: each `ensures` of a pure, total function is proved by
      `grind` (with functional induction for recursion) or reported `unproved`. **Next, in order:** (1) modular
-     proofs: give each proof its callees' `ensures` theorems as `grind` lemmas, and prove each call's
-     `requires` from the caller's facts (then a callee's run-time `requires` check is provably dead); a
-     callee's unproved `ensures` makes its callers' proofs depend on `sorryAx`, so report "proved, assuming fn
-     g's `ensures`" separately; (2) a counterexample for an unproved `ensures` (Lean's `plausible`? not in
+     proofs: **done, D31 (step 6)**, except proving each call's `requires`, which needs per-call-site theorems
+     with the path condition or a model where traps are visible (D31 says why); (2) a counterexample for an unproved `ensures` (Lean's `plausible`? not in
      core; or clc evaluates the function on small inputs with the examples' machinery); (3) loops: `for` over
      ranges first, with `invariant` lines, likely by emitting the loop as a local recursive function; then
      `while` with a `decreases` measure; (4) a `grind` heartbeat cap that degrades to `sorry`.

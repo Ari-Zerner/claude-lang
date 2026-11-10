@@ -567,10 +567,11 @@ class LeanEmitter:
 
     def spec_theorems(self, out):
         """D30: each `ensures` of a pure, total function as a theorem whose hypotheses are its `requires`, proved
-        by a fixed list of tactics or else left as `sorry` (a warning to Lean, not an error, so the build goes
-        on; `#print axioms` then shows `sorryAx`). `self.specs` lists (fn, ensures line, theorem or None, why)."""
+        by a fixed list of tactics with the callees' `ensures` theorems as lemmas (modular, D31). One that isn't
+        proved is closed by its own axiom `clUnproved_f_j`, which only a warning reports, so the build goes on,
+        and `#print axioms` tells "proved" from "proved, assuming g's unproved `ensures`" from "not proved".
+        `self.specs` lists (fn, ensures line, theorem or None, why not)."""
         self.specs = []
-        hints = "[clMod_bound, clDiv]"
         for comp in self.comps:
             for name in comp:
                 f = self.by_name[name]
@@ -585,10 +586,14 @@ class LeanEmitter:
                 if why:
                     self.specs += [(f, c, None, why) for c in ens]
                     continue
+                # Callees' `ensures` reach grind through `grind_pattern` (below), which fires on any call.
+                hints = "[clMod_bound, clDiv]"
                 reqs = contracts(f, "requires")
+                names = (["cl_loc"] if reqs else []) + [f"v_{n}" for n, _, _ in f.params]
                 binders = (["(cl_loc : String)"] if reqs else []) + [
                     f"(v_{n} : {ltype(t, n)})" for n, t, _ in f.params]
                 binders += [f"(cl_h{i} : {self.expr(r.expr)})" for i, r in enumerate(reqs)]
+                names += [f"cl_h{i}" for i in range(len(reqs))]
                 args = " ".join((["cl_loc"] if reqs else []) + [f"v_{n}" for n, _, _ in f.params]) or "()"
                 call = f"({self.lname(name)} {args})"
                 tactics = [f"(unfold {self.lname(name)}; grind {hints})"]
@@ -601,30 +606,44 @@ class LeanEmitter:
                     self.names = {}
                     out.append("")
                     out.append(f"-- fn {name}: ensures {c.text} (line {c.tok.line})")
+                    out.append(f"axiom clUnproved_{name}_{j} {' '.join(binders)} :")
+                    out.append(f"    {goal}")
                     out.append(f"theorem {thm} {' '.join(binders)} :")
                     out.append(f"    {goal} := by")
                     out.append("  first")
                     out += [f"  | {t}" for t in tactics]
-                    out.append("  | sorry")
+                    out.append(f"  | exact clUnproved_{name}_{j} {' '.join(names)}")
                     out.append(f"#print axioms {thm}")
+                    # Callers' proofs get this fact wherever they call the function (D31). Its default trigger
+                    # would be the whole `decide (...)`, which no caller contains.
+                    out.append(f"grind_pattern {thm} => {self.lname(name)} {args}")
                     self.specs.append((f, c, thm, None))
 
     def read_specs(self, stdout):
         """Which of `spec_theorems`' theorems Lean proved: (fn, ensures line, None if proved else why not)."""
-        proved = set()
+        axioms = {}
         for ln in stdout.splitlines():
             m = re.match(r"'([^']+)' (does not depend on any axioms|depends on axioms: \[(.*)\])", ln)
-            if m and "sorryAx" not in (m.group(3) or ""):
-                proved.add(m.group(1))
+            if m:
+                axioms[m.group(1)] = {a.strip() for a in (m.group(3) or "").split(",") if a.strip()}
+        by_thm = {thm: (f, c) for f, c, thm, _ in getattr(self, "specs", []) if thm}
         res = []
         for f, c, thm, why in getattr(self, "specs", []):
-            if thm in proved:
-                res.append((f, c, None))
-                continue
             if why is None:
-                loops = [k for k in ("while", "for") if nodes_of(f.body, k)]
-                why = (f"it has a `{loops[0]}` loop, and clc can't prove things about loops yet" if loops
-                       else "clc's automation (`grind`, with induction for recursion) didn't find a proof")
+                used = axioms.get(thm, {"sorryAx"})
+                own = "clUnproved_" + thm[len("clSpec_"):]
+                assumed = sorted(a for a in used if a.startswith("clUnproved_") and a != own)
+                if own in used or "sorryAx" in used:
+                    loops = [k for k in ("while", "for") if nodes_of(f.body, k)]
+                    why = (f"it has a `{loops[0]}` loop, and clc can't prove things about loops yet" if loops
+                           else "clc's automation (`grind`, with induction for recursion) didn't find a proof")
+                elif assumed:
+                    parts = []
+                    for a in assumed:
+                        g, e = by_thm["clSpec_" + a[len("clUnproved_"):]]
+                        parts.append(f"fn {g.name}'s `ensures {e.text}` (line {e.tok.line})")
+                    why = (f"it follows from {', '.join(parts)}, which "
+                           f"{'isn' if len(parts) == 1 else 'aren'}'t proved")
             res.append((f, c, why))
         return res
 

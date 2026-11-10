@@ -58,11 +58,11 @@ def termination(f, tmp):
 
 
 def unproved_problems(f):
-    """A program with `ensures` (D30) must leave unproved exactly the lines its `# unproved: 17 18` line lists."""
+    """In a program with `ensures` (D30), exactly the `ensures` lines ending in `# unproved` must be unproved."""
     src = open(f).read()
     if not re.search(r"^\s*ensures ", src, re.M) or (BACKEND and BACKEND[1] != "lean"):
         return None
-    want = sorted(int(x) for x in " ".join(re.findall(r"^#\s*unproved:(.*)$", src, re.M)).split())
+    want = [i + 1 for i, ln in enumerate(src.split("\n")) if re.match(r"\s*ensures .*#\s*unproved\s*$", ln)]
     r = subprocess.run([sys.executable, CLC, "test", "--json", f], capture_output=True, text=True)
     try:
         got = sorted(d["line"] for d in json.loads(r.stderr or "[]") if d["code"] == "unproved")

@@ -410,17 +410,34 @@ Claude differs from a human programmer in ways that matter for language design:
     `clDiv` as hints. Probe (night 6): `unfold; grind` proves clamp's `lo <= result and result <= hi` and a
     struct-field `ensures`; `fun_induction ... <;> grind [clDiv]` proves `count_digits(n) >= 1` and
     `down(n) == 0` for every `n >= 0`. `unfold; simp_all; split; omega` failed where grind worked.
-  - *`sorry` keeps it to one Lean run.* A failed tactic is an error, but `sorry` is only a warning, so an
-    unprovable `ensures` doesn't stop the build, and `#print axioms` then says which theorems lean on
-    `sorryAx`. (D28 can't do this: a `sorry` there would make any measure "work".)
+  - *A fallback keeps it to one Lean run.* A failed tactic is an error, but the last alternative always closes
+    the goal (first `sorry`, now a per-theorem axiom, D31), so an unprovable `ensures` doesn't stop the build,
+    and `#print axioms` says what each theorem leans on. (D28 can't do this: a fallback there would make any
+    measure "work".)
   - *An unproved `ensures` is a warning, not an error,* because it's still checked at run time: `unproved` at
     the `ensures` line, with the reason: a `while`/`for` loop (not provable yet), a function D28 left
     `partial`, io, or "the automation didn't find a proof" (which includes a false `ensures` that no example
     reaches, like `wrong_abs` returning `x` for `x < -5`). `clc test` ends with "N of M `ensures` proved".
-  - *Not yet:* callers can't use a callee's proved `ensures` (each proof sees only its own function: modular
-    proofs are next), call-site proofs of `requires`, loops (`invariant`), counterexamples for a false
+  - *Not yet:* call-site proofs of `requires` (D31), loops (`invariant`), counterexamples for a false
     `ensures` (the automation only says it failed), a heartbeat limit for a slow `grind` (a timeout would be
     an error, not a `sorry`).
+
+- **D31. Proofs are modular: a function's proved `ensures` is a fact at every call; an unproved one is an
+  assumption that's named.** (2026-11-10, night 6; built.)
+  - *Callers use callees' contracts, not their bodies:* each spec theorem gets `grind_pattern clSpec_g_j =>
+    f_g args`, so any later `grind` that sees a call to `g` gets `g`'s `ensures` (when `g`'s `requires` holds
+    there). Without it `grind` picks the whole `decide (...)` conclusion as the trigger, which no caller
+    contains (measured: `digits_plus(n) = count_digits(n) + 1 >= 2` failed, and proves with it).
+  - *An unproved `ensures` is closed by its own axiom,* `clUnproved_f_j` (the same statement), instead of
+    `sorry`. Then `#print axioms` names exactly which unproved contracts a proof leans on, and clc reports
+    three outcomes: proved; "it follows from fn g's `ensures ...` (line N), which isn't proved" (only other
+    functions' axioms); or not proved (its own axiom). Both unproved kinds are `unproved` warnings and count
+    as unproved in "N of M proved", since a false assumption proves anything.
+  - *Not yet:* proving each call's `requires`. In this model a trap is `default` to the kernel, so "this call
+    never breaks `requires`" isn't a statement about results; it needs either one theorem per call site with
+    the path condition, or a model where traps are visible (an `Except`-style result). Until then a callee's
+    `requires` is still checked at run time, and a caller's proof can only use the callee's `ensures` where
+    it can show the `requires` itself.
 
 ## Open questions
 

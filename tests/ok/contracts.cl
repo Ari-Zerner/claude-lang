@@ -3,9 +3,9 @@
 # a hypothesis inside the body, so `down` below is total (D28); `ensures` is checked at each `return`, with
 # `result` naming the value. The failures are in tests/err/contracts-run.cl.
 # total: down count_digits
-# The `unproved` line lists the `ensures` lines clc can't prove (D30): isqrt's (a `while` loop), wrong_abs's (it's
-# false for x < -5, which nothing here reaches) and spin's (no `requires`, so it may never stop).
-# unproved: 16 17 70 83
+# An `ensures` marked `# unproved` must be one clc can't prove (D30), and every other must be proved: isqrt's
+# (a `while` loop), wrong_abs's (false for x < -5, which nothing here reaches), spin's (no `requires`, so it may
+# never stop) and double_abs's (it follows from wrong_abs's, D31). digits_plus is proved from count_digits's.
 struct Range
   lo: Int
   hi: Int
@@ -13,8 +13,8 @@ end struct Range
 
 fn isqrt(n: Int) -> Int
   requires n >= 0
-  ensures result >= 0
-  ensures result * result <= n and (result + 1) * (result + 1) > n
+  ensures result >= 0  # unproved
+  ensures result * result <= n and (result + 1) * (result + 1) > n  # unproved
   example isqrt(10) == 3
   example isqrt(0) == 0
   var r = 0
@@ -67,7 +67,7 @@ end fn clamp
 
 # false for x < -5, which no example or call reaches: checked at run time, and not proved
 fn wrong_abs(x: Int) -> Int
-  ensures result >= 0
+  ensures result >= 0  # unproved
   example wrong_abs(-3) == 3
   if x < -5
     return x
@@ -80,12 +80,27 @@ end fn wrong_abs
 
 # never stops for a negative n, and nothing rules that out
 fn spin(n: Int) -> Int
-  ensures result == 0
+  ensures result == 0  # unproved
   if n == 0
     return 0
   end if
   return spin(n - 1)
 end fn spin
+
+# proved from count_digits's `ensures`, whose `requires` this one's `requires` gives (D31)
+fn digits_plus(n: Int) -> Int
+  requires n >= 0
+  ensures result >= 2
+  example digits_plus(5) == 2
+  return count_digits(n) + 1
+end fn digits_plus
+
+# would follow from wrong_abs's `ensures`, which isn't proved
+fn double_abs(x: Int) -> Int
+  ensures result >= 0  # unproved
+  example double_abs(-3) == 6
+  return 2 * wrong_abs(x)
+end fn double_abs
 
 fn greet(times: Int) uses io
   requires times >= 1
@@ -102,5 +117,7 @@ fn main() uses io
   print(clamp(x: -4, lo: 0, hi: 10))
   print(wrong_abs(-2))
   print(spin(3))
+  print(digits_plus(123))
+  print(double_abs(4))
   greet(2)
 end fn main
