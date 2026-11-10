@@ -421,6 +421,19 @@ design and its decisions (D1...).
   (`trial.py`, `fixloop.py`, `hidden.py`) pass `--backend c` for fast builds until stage 4 needs Lean. DESIGN
   D26 records stages 1-3 as done. **Lean 30/30, C 29/29.**
 
+- 2026-11-10 (night 6, step 1): **probe for D26 stage 4(a), recursive functions as total `def`s; decided as
+  D28, not built yet.** Findings (`trials/lean/termination.lean`): Lean's own search tries only `sizeOf` of each
+  parameter, so no `Int` recursion (`fact`, `fib`, `gcd`) proves as a plain `def`; with `termination_by
+  n.toNat` and `decreasing_by all_goals (simp_wf; omega)` factorial, fib and a count-up `(hi - lo + 1).toNat`
+  all prove. gcd needs `termination_by b.natAbs` and `grind [clMod_bound]` (a prelude lemma: `b = 0` or
+  `0 <= clMod a b m < |b|`); binary search with `(lo + hi) / 2` needs `grind [clMod_bound, clDiv]`. Enum
+  recursion (`Expr` eval) is structural and proves as a plain `def`. A tree through `List[Tree]`: Lean adds
+  `k ∈ t.kids` for `for k in t.kids` by itself, and the proof is `have := Array.sizeOf_lt_of_mem ‹_ ∈ _›;
+  have := T_Tree.clSize_v_kids v_t; omega` with a generated lemma `sizeOf r.v_kids < sizeOf r` (`cases r;
+  simp; omega`). `f(n)` with base case `n == 0` correctly fails (negative `n` loops). **A try-each-candidate
+  command needs `import Lean`, measured at 40-60 s per build here** (1.4 s with only Init), so D28 picks
+  measures with a separate probe elaboration instead, read through `#print axioms` (`sorryAx` = failed).
+
 ## Next step
 1. **Formal verification** (Ari, 2026-11-07: "we definitely want proofs, not just fuzzing"; see
    DESIGN.md open questions): contracts (`requires`/`ensures`), build-time counterexample search,
@@ -443,9 +456,13 @@ design and its decisions (D1...).
      Stage 2 is done too (night 5, steps 2-4: lists, structs, enums, Option/Result, match). **Next: stage 3,
      Lean becomes the default.** Done (night 5, step 6); C stays as `--backend c` for the trial harnesses.
      **Next: stage 4, contracts**, the point of D26. Bite-sized order: (a) recursive functions as real `def`s,
-     not `partial def`: try plain `def` first (Lean finds structural recursion or a `termination_by` measure
-     itself for many), fall back to `partial` when Lean can't prove termination, and report which, since only a
-     real `def` can be proved about; `while` loops are a separate problem (Lean's `while` is `partial` inside;
+     not `partial def` (**D28; probe done night 6 step 1, build it next**: in `cl_lean.py`, a recursive SCC gets
+     candidate measures from its parameter types, a probe file (types + functions + each candidate renamed,
+     e.g. `f_gcd__t2`, self-calls renamed too, then `#print axioms` for each) is elaborated first by
+     `clc.py lean_main` when any SCC is recursive, and the real file uses the first candidate without
+     `sorryAx`, else `partial`; prelude gains `clMod_bound`, struct-size lemmas are generated per struct field
+     of list/struct type; `--emit-lean` comments say which measure or `partial`; tests: fact/fib/gcd/tree/eval
+     total, `n == 0` partial; a cache of probe results by hash is optional); `while` loops are a separate problem (Lean's `while` is `partial` inside;
      loops that need proofs may have to become `for` or recursion, or use `Loop` specs). (b) Syntax:
      `requires <Bool expr>` / `ensures <Bool expr>` lines next to `example` (with `result` naming the return
      value), checked at run time first (a failed `requires` is the caller's error at the call's line, a failed

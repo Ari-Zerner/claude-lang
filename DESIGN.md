@@ -341,6 +341,30 @@ Claude differs from a human programmer in ways that matter for language design:
   - The C backend follows it (a two-line fix after C's `/`), so both backends agree while D26 is underway.
     No test or trial depended on the old rule.
 
+- **D28. A recursive function is a total `def` when the compiler can find why it stops, else `partial`.**
+  (2026-11-10, night 6; decided, being built.) Only a total `def` can be proved about (D26 stage 4): Lean treats
+  a `partial def` as an opaque constant, so no contract on it, or on its callers, can be proved through it.
+  - *Lean can't find measures over `Int` by itself.* Its search (GuessLex) tries only `sizeOf` of each
+    parameter, which never decreases for `n - 1` on an `Int`. Structural recursion (enums like `Expr`) it
+    does find. So clc proposes the candidates: for each `Int` parameter `p`, `p.toNat` and `p.natAbs`; for
+    each pair, `(q - p + 1).toNat` (counting up to a bound), with `length` of a list parameter as a bound
+    too; plain `def` first when a parameter is a struct, enum or list.
+  - *The proof is a fixed tactic:* `simp_wf`, then `omega`, else `grind` with a prelude lemma bounding
+    `clMod a b m` by `|b|` (gcd) and `clDiv` unfolded (literal divisors, e.g. binary search's
+    `(lo + hi) / 2`); for a recursive struct, a generated `sizeOf r.field < sizeOf r` lemma plus Lean's own
+    membership hypothesis from `for x in r.field`.
+  - *Choosing needs a separate Lean run.* A command that tries each candidate and keeps the first that
+    checks needs a custom elaborator, which needs `import Lean`: measured at 40-60 s per build on this box
+    (vs ~1.4 s with only `Init`). So when a program has recursion, clc elaborates a probe file first: the
+    program's types and functions, plus every candidate under its own name, and reads `#print axioms` for
+    each (a failed proof leaves `sorryAx`). The real file uses the first candidate that checked, or
+    `partial`. Programs without recursion skip the probe.
+  - *A function that may not stop stays runnable.* `partial` is the honest answer for `f(n)` with base case
+    `n == 0` (negative `n` never stops), and the probe gets it right (measured). It matters once the
+    function has a contract: then clc can say the proof needs a reason it stops.
+  - *Not yet:* lexicographic measures (Ackermann), mutual recursion beyond structural, recursion inside a
+    `while` body. Those stay `partial`.
+
 ## Open questions
 
 - Memory management: value semantics with copy-on-write (D19); nothing is freed yet.
