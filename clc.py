@@ -3092,6 +3092,11 @@ def lean_main(args, d, fns, structs):
                   f"Lean kept at {lfile}\n{shown[:4000]}{err[:2000]}", file=sys.stderr)
             return 2
         example_diags(out, err, timed_out, em, d)
+        specs = em.read_specs(out)
+        for f, c, why in specs:
+            if why:
+                d.warning("unproved", f"`ensures {c.text}` isn't proved: {why}. It's still checked at run time",
+                          c.tok.line, c.tok.col, len("ensures"))
         if not d.has_errors() and args.command in ("build", "run"):
             r = None
             if args.command == "run":
@@ -3113,7 +3118,9 @@ def lean_main(args, d, fns, structs):
         if d.has_errors():
             return 1
         if args.command == "test" and not args.json:
-            print(f"{len(em.examples)} example(s) passed", file=sys.stderr)
+            proved = sum(1 for _, _, why in specs if why is None)
+            print(f"{len(em.examples)} example(s) passed" +
+                  (f"; {proved} of {len(specs)} `ensures` proved" if specs else ""), file=sys.stderr)
         if args.command == "run":
             return subprocess.run([exe]).returncode
         return 0

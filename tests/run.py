@@ -57,6 +57,20 @@ def termination(f, tmp):
     return exe, problems
 
 
+def unproved_problems(f):
+    """A program with `ensures` (D30) must leave unproved exactly the lines its `# unproved: 17 18` line lists."""
+    src = open(f).read()
+    if not re.search(r"^\s*ensures ", src, re.M) or (BACKEND and BACKEND[1] != "lean"):
+        return None
+    want = sorted(int(x) for x in " ".join(re.findall(r"^#\s*unproved:(.*)$", src, re.M)).split())
+    r = subprocess.run([sys.executable, CLC, "test", "--json", f], capture_output=True, text=True)
+    try:
+        got = sorted(d["line"] for d in json.loads(r.stderr or "[]") if d["code"] == "unproved")
+    except json.JSONDecodeError:
+        return f"`clc test --json` didn't give JSON: {r.stderr[:500]}"
+    return None if got == want else f"unproved `ensures` on lines {got}, expected {want}"
+
+
 import tempfile
 for f in sorted(f for f in glob.glob(os.path.join(HERE, "ok", "*.cl")) if wanted(f) and backend_ok(f)):
     with tempfile.TemporaryDirectory() as tmp:
@@ -68,9 +82,13 @@ for f in sorted(f for f in glob.glob(os.path.join(HERE, "ok", "*.cl")) if wanted
     want = open(f[:-3] + ".out").read()
     if skip(r, os.path.relpath(f, HERE)):
         continue
+    unproved = unproved_problems(f)
     if term and term[1]:
         failed += 1
         print(f"FAIL {os.path.relpath(f, HERE)}: {'; '.join(term[1])}")
+    elif unproved:
+        failed += 1
+        print(f"FAIL {os.path.relpath(f, HERE)}: {unproved}")
     elif r.returncode == 0 and r.stdout == want:
         passed += 1
     else:

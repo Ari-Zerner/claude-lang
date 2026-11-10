@@ -193,6 +193,8 @@ end fn name
   what callers must pass; a call that breaks it stops the program at the call. `ensures` says what
   the function returns, with `result` naming the value: `ensures result >= 0`. A `return` that
   breaks it stops the program at that `return`. A function that returns nothing has no `ensures`.
+  The compiler also tries to **prove** each `ensures` from the `requires`, for every input; one it
+  can't prove gets a warning (`unproved`, with the reason) and is still checked at run time.
 
   ```
   fn isqrt(n: Int) -> Int

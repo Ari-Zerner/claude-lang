@@ -404,6 +404,7 @@ class LeanEmitter:
                         out.append(f"#print axioms clT{i}_{n}")
         if probe:
             return "\n".join(out) + "\n"
+        self.spec_theorems(out)
         out.append("")
         out.append("-- examples (D8), run while Lean elaborates this file")
         for i, s in enumerate(self.examples):
@@ -563,6 +564,69 @@ class LeanEmitter:
             common = [n for n in first if all(any(m == n and t == "Int" for m, t, _ in f.params) for f in fs)]
             out += [{f.name: (f"v_{p}.toNat", tactic(f)) for f in fs} for p in common if p in compared]
         return out[:MAX_CANDIDATES]
+
+    def spec_theorems(self, out):
+        """D30: each `ensures` of a pure, total function as a theorem whose hypotheses are its `requires`, proved
+        by a fixed list of tactics or else left as `sorry` (a warning to Lean, not an error, so the build goes
+        on; `#print axioms` then shows `sorryAx`). `self.specs` lists (fn, ensures line, theorem or None, why)."""
+        self.specs = []
+        hints = "[clMod_bound, clDiv]"
+        for comp in self.comps:
+            for name in comp:
+                f = self.by_name[name]
+                ens = contracts(f, "ensures")
+                if not ens:
+                    continue
+                why = None
+                if f.uses_io:
+                    why = "it uses io, and clc can't reason about io yet"
+                elif self.is_recursive(comp) and self.how.get(tuple(comp)) == "partial":
+                    why = f"clc couldn't show that fn {name} always stops (D28), so nothing can be proved about it"
+                if why:
+                    self.specs += [(f, c, None, why) for c in ens]
+                    continue
+                reqs = contracts(f, "requires")
+                binders = (["(cl_loc : String)"] if reqs else []) + [
+                    f"(v_{n} : {ltype(t, n)})" for n, t, _ in f.params]
+                binders += [f"(cl_h{i} : {self.expr(r.expr)})" for i, r in enumerate(reqs)]
+                args = " ".join((["cl_loc"] if reqs else []) + [f"v_{n}" for n, _, _ in f.params]) or "()"
+                call = f"({self.lname(name)} {args})"
+                tactics = [f"(unfold {self.lname(name)}; grind {hints})"]
+                if self.is_recursive(comp):
+                    tactics.insert(0, f"(fun_induction {self.lname(name)} {args} <;> grind {hints})")
+                for j, c in enumerate(ens):
+                    thm = f"clSpec_{name}_{j}"
+                    self.names = {"result": call}
+                    goal = self.expr(c.expr)
+                    self.names = {}
+                    out.append("")
+                    out.append(f"-- fn {name}: ensures {c.text} (line {c.tok.line})")
+                    out.append(f"theorem {thm} {' '.join(binders)} :")
+                    out.append(f"    {goal} := by")
+                    out.append("  first")
+                    out += [f"  | {t}" for t in tactics]
+                    out.append("  | sorry")
+                    out.append(f"#print axioms {thm}")
+                    self.specs.append((f, c, thm, None))
+
+    def read_specs(self, stdout):
+        """Which of `spec_theorems`' theorems Lean proved: (fn, ensures line, None if proved else why not)."""
+        proved = set()
+        for ln in stdout.splitlines():
+            m = re.match(r"'([^']+)' (does not depend on any axioms|depends on axioms: \[(.*)\])", ln)
+            if m and "sorryAx" not in (m.group(3) or ""):
+                proved.add(m.group(1))
+        res = []
+        for f, c, thm, why in getattr(self, "specs", []):
+            if thm in proved:
+                res.append((f, c, None))
+                continue
+            if why is None:
+                loops = [k for k in ("while", "for") if nodes_of(f.body, k)]
+                why = (f"it has a `{loops[0]}` loop, and clc can't prove things about loops yet" if loops
+                       else "clc's automation (`grind`, with induction for recursion) didn't find a proof")
+            res.append((f, c, why))
+        return res
 
     def read_probe(self, stdout):
         """Pick, for each recursive group, the first candidate whose every function the probe proved total."""

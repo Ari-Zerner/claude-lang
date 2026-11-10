@@ -479,6 +479,15 @@ design and its decisions (D1...).
   `# total: down count_digits`), `tests/err/contracts.cl` (the six checker errors),
   `tests/err/contracts-run.cl` (a `requires` broken by an example). SPEC.md documents contracts (2.1k words). **Lean 34/34, C 31/31 + 1 skipped** (contracts need Lean).
 
+- 2026-11-10 (night 6, step 5): **D30: the first proofs. Each `ensures` of a pure, total function is a
+  theorem, tried by `fun_induction <;> grind` (recursive) or `unfold; grind`, else `sorry`;** `#print axioms`
+  says which were proved; `clc.py` turns the rest into `unproved` warnings with a reason, and `clc test` says
+  "N of M `ensures` proved". `cl_lean.py`: `spec_theorems` (emitted after the functions, before the examples)
+  and `read_specs`. `tests/ok/contracts.cl` now proves 4 of 8: clamp, width, count_digits (by induction),
+  down; unproved, as listed in its new `# unproved: 16 17 70 83` line that `tests/run.py` checks against
+  `clc test --json` (a wrong list fails, checked): isqrt's two (`while`), wrong_abs (false for x < -5, which
+  no example reaches), spin (partial). `clc test tests/ok/contracts.cl` ~2.7 s CPU. **Lean 34/34, C 31/31 + 1 skipped.**
+
 ## Next step
 1. **Formal verification** (Ari, 2026-11-07: "we definitely want proofs, not just fuzzing"; see
    DESIGN.md open questions): contracts (`requires`/`ensures`), build-time counterexample search,
@@ -504,8 +513,15 @@ design and its decisions (D1...).
      not `partial def` (**D28, built night 6 steps 2-3**, with a probe cache; small gap: a sign-flipping call
      `f(-n)` needs a `2 * |n| + (1 if n < 0)` candidate); `while` loops are a separate problem (Lean's `while` is `partial` inside;
      loops that need proofs may have to become `for` or recursion, or use `Loop` specs). (b) contracts checked
-     at run time: **done, D29 (night 6 step 4)**. (c) Proofs, **next**: emit `theorem f_spec : requires -> ensures` and try `by unfold;
-     omega`, `simp`, `grind`, `decide`; report an unproved goal at the claude-lang line, in claude-lang terms.
+     at run time: **done, D29 (night 6 step 4)**. (c) Proofs: **started, D30 (night 6 step 5)**: each `ensures` of a pure, total function is proved by
+     `grind` (with functional induction for recursion) or reported `unproved`. **Next, in order:** (1) modular
+     proofs: give each proof its callees' `ensures` theorems as `grind` lemmas, and prove each call's
+     `requires` from the caller's facts (then a callee's run-time `requires` check is provably dead); a
+     callee's unproved `ensures` makes its callers' proofs depend on `sorryAx`, so report "proved, assuming fn
+     g's `ensures`" separately; (2) a counterexample for an unproved `ensures` (Lean's `plausible`? not in
+     core; or clc evaluates the function on small inputs with the examples' machinery); (3) loops: `for` over
+     ranges first, with `invariant` lines, likely by emitting the loop as a local recursive function; then
+     `while` with a `decreases` measure; (4) a `grind` heartbeat cap that degrades to `sorry`.
      Optional anytime: a precompiled prelude module (saves ~40% of the C compile).
    - a **change trial** (modify an existing program) is still the best place left for exhaustive
      `match` to show, if it shows anywhere (see night 4, step 4).

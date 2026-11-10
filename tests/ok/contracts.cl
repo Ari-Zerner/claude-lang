@@ -3,6 +3,9 @@
 # a hypothesis inside the body, so `down` below is total (D28); `ensures` is checked at each `return`, with
 # `result` naming the value. The failures are in tests/err/contracts-run.cl.
 # total: down count_digits
+# The `unproved` line lists the `ensures` lines clc can't prove (D30): isqrt's (a `while` loop), wrong_abs's (it's
+# false for x < -5, which nothing here reaches) and spin's (no `requires`, so it may never stop).
+# unproved: 16 17 70 83
 struct Range
   lo: Int
   hi: Int
@@ -62,6 +65,28 @@ fn clamp(x: Int, lo: Int, hi: Int) -> Int
   return x
 end fn clamp
 
+# false for x < -5, which no example or call reaches: checked at run time, and not proved
+fn wrong_abs(x: Int) -> Int
+  ensures result >= 0
+  example wrong_abs(-3) == 3
+  if x < -5
+    return x
+  end if
+  if x < 0
+    return -x
+  end if
+  return x
+end fn wrong_abs
+
+# never stops for a negative n, and nothing rules that out
+fn spin(n: Int) -> Int
+  ensures result == 0
+  if n == 0
+    return 0
+  end if
+  return spin(n - 1)
+end fn spin
+
 fn greet(times: Int) uses io
   requires times >= 1
   for i in 1 through times
@@ -75,5 +100,7 @@ fn main() uses io
   print(count_digits(1000000))
   print(width(Range(lo: -3, hi: 4)))
   print(clamp(x: -4, lo: 0, hi: 10))
+  print(wrong_abs(-2))
+  print(spin(3))
   greet(2)
 end fn main

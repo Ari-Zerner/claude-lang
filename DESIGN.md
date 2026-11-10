@@ -400,6 +400,28 @@ Claude differs from a human programmer in ways that matter for language design:
     `old(...)`-style state (nothing is mutable across a call, so not needed yet), long argument values in
     messages aren't shortened.
 
+- **D30. Each `ensures` is a theorem the compiler tries to prove; an unproved one is a warning.** (2026-11-10,
+  night 6; built: the first proofs, stage 4(c) of D26.)
+  - *The statement:* for a pure function that D28 made total, each `ensures` becomes `theorem clSpec_f_j
+    (params) (one hypothesis per requires) : ensures[result := f(params)]`. The function body still contains
+    its run-time checks, so the proof has to show that no check can fail, which is the claim itself.
+  - *The proof is fixed automation, never Claude's job:* `first | (fun_induction f args <;> grind [...]) |
+    (unfold f; grind [...]) | sorry`, induction only for recursive functions, with D28's `clMod_bound` and
+    `clDiv` as hints. Probe (night 6): `unfold; grind` proves clamp's `lo <= result and result <= hi` and a
+    struct-field `ensures`; `fun_induction ... <;> grind [clDiv]` proves `count_digits(n) >= 1` and
+    `down(n) == 0` for every `n >= 0`. `unfold; simp_all; split; omega` failed where grind worked.
+  - *`sorry` keeps it to one Lean run.* A failed tactic is an error, but `sorry` is only a warning, so an
+    unprovable `ensures` doesn't stop the build, and `#print axioms` then says which theorems lean on
+    `sorryAx`. (D28 can't do this: a `sorry` there would make any measure "work".)
+  - *An unproved `ensures` is a warning, not an error,* because it's still checked at run time: `unproved` at
+    the `ensures` line, with the reason: a `while`/`for` loop (not provable yet), a function D28 left
+    `partial`, io, or "the automation didn't find a proof" (which includes a false `ensures` that no example
+    reaches, like `wrong_abs` returning `x` for `x < -5`). `clc test` ends with "N of M `ensures` proved".
+  - *Not yet:* callers can't use a callee's proved `ensures` (each proof sees only its own function: modular
+    proofs are next), call-site proofs of `requires`, loops (`invariant`), counterexamples for a false
+    `ensures` (the automation only says it failed), a heartbeat limit for a slow `grind` (a timeout would be
+    an error, not a `sorry`).
+
 ## Open questions
 
 - Memory management: value semantics with copy-on-write (D19); nothing is freed yet.
