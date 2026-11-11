@@ -463,7 +463,7 @@ design and its decisions (D1...).
   `is_even(-n)`, so it always stops, but the measure needs the sign (`2 * |n| + (1 if n < 0)`); no candidate
   covers a call passing `-p` yet. **So for stage 4 the bigger job is loops, not recursion**: `while` and `for`
   are what Claude writes, and proving anything about a function with a `while` needs it as a total
-  definition too (Lean's `while` is `partial` inside).
+  definition too (Lean's `while` is `partial` inside: **not so in Lean 4.35**, see night 7 step 3).
 
 - 2026-11-10 (night 6, step 4): **D29: `requires`/`ensures`, checked at run time (stage 4(b)).** Parser and
   checker in `clc.py` (keywords `requires`/`ensures`, `HEADER_KINDS`, `in_contract`; new codes
@@ -533,6 +533,32 @@ design and its decisions (D1...).
   10000 nested calls but not 100000; 256 MB holds 100000 (peak RSS 775 MB when it fails at 1000000).
   **Lean 37/37, C 31/31 + 3 skipped** (the three contract tests that need Lean; `example-endless` is Lean only).
 
+- 2026-11-11 (night 7, step 3): **loops probe: two routes to proving a function with a loop, both work on
+  isqrt; not decided yet.** Hand-written Lean in the emitter's own style, with the real prelude.
+  - **Route A, the loop as a recursive function** (`trials/lean/loops.lean`): `f.loop1` over the loop's
+    variables, a run-time `invariant` check first (so the invariant is a hypothesis below it), `termination_by`
+    from a `decreases` line or from the range, a loop theorem (invariant in, invariant and not-condition out)
+    by `fun_induction <;> grind` with a `grind_pattern`, and the function's `ensures` by `unfold; grind` as in
+    D30. **All four prove end to end:** isqrt (`while`, `decreases n - r * r`, the nonlinear `ensures` and
+    all), triangle numbers (`for ... through`, `t * 2 == (i - 1) * i`), gcd (two variables, returned as a
+    pair, `decreases y`; needed a new prelude lemma `clMod_pos`: `0 <= a % b < b` for `b > 0`), count_up (a
+    list in the state). 2.9 s CPU for the file. Only `decreases n - r` for isqrt fails (it needs
+    (r + 1)^2 >= r + 1). Compiled, the recursive loop is as fast as the `do` loop and updates its array in
+    place (3M iterations, ~0.5 s and 124 MB both).
+  - **Route B, Lean's own `mvcgen` on the loop as emitted today** (`trials/lean/loops_mvcgen.lean`). A
+    correction first: **Lean 4.35's `while` isn't `partial`** (`Loop.forIn` is `repeatM`), and `mvcgen` takes
+    a `WhileInvariant` and a `WhileVariant`. With those two terms and `all_goals (mleave; grind)`,
+    **isqrt's `ensures` proves on `f_isqrt` exactly as clc emits it now**: no change to the program at all.
+    The `for` loop gets as far as two open goals: `grind` doesn't know that the item after a prefix of
+    `(1...=n).toList` is `1 + prefix.length`, or the list's length (two prelude lemmas, not written yet).
+    `import Std.Tactic.Do` costs only ~0.3 s CPU. But the framework is mid-move: `mvcgen` is marked
+    deprecated for `vcgen`, which is marked experimental, lives in `Std.WP`, and fails as a drop-in here.
+  - **How they compare:** A needs a loop-to-recursion translation in `cl_lean.py` (and `break`, `continue`,
+    early `return`, nested loops each need their own handling), but uses only what D28/D30 already use. B
+    changes nothing that runs and gets `break`/`return`/nesting from Lean, but its proof scripts are written
+    in a library that's being replaced, and `for` needs the lemmas above. Later, B's program logic is the
+    natural home for "this function never traps" (D31's open item).
+
 ## Next step
 1. **Formal verification** (Ari, 2026-11-07: "we definitely want proofs, not just fuzzing"; see
    DESIGN.md open questions): contracts (`requires`/`ensures`), build-time counterexample search,
@@ -556,7 +582,7 @@ design and its decisions (D1...).
      Lean becomes the default.** Done (night 5, step 6); C stays as `--backend c` for the trial harnesses.
      **Next: stage 4, contracts**, the point of D26. Bite-sized order: (a) recursive functions as real `def`s,
      not `partial def` (**D28, built night 6 steps 2-3**, with a probe cache; small gap: a sign-flipping call
-     `f(-n)` needs a `2 * |n| + (1 if n < 0)` candidate); `while` loops are a separate problem (Lean's `while` is `partial` inside;
+     `f(-n)` needs a `2 * |n| + (1 if n < 0)` candidate); `while` loops are a separate problem (I took Lean's `while` for `partial` inside; in 4.35 it isn't, night 7 step 3;
      loops that need proofs may have to become `for` or recursion, or use `Loop` specs). (b) contracts checked
      at run time: **done, D29 (night 6 step 4)**. (c) Proofs: **started, D30 (night 6 step 5)**: each `ensures` of a pure, total function is proved by
      `grind` (with functional induction for recursion) or reported `unproved`. **Next, in order:** (1) modular
@@ -565,15 +591,16 @@ design and its decisions (D1...).
      **done, D32 (night 7 steps 1-2)**, by calling the function on small inputs and its own literals.
      Follow-ups left, small: lists longer than four items from a tiny item pool; maybe search functions with
      no contract for crashes (run it over the trial corpus first to see how much it flags).
-     **Next step (night 7 step 3): a hand-written Lean probe for loops, `trials/lean/loops.lean`, before
-     building anything.** isqrt's `while` as a recursive function over the loop's variables (a run-time
-     `invariant` check first, so the invariant and the condition are hypotheses, as `requires` are in D29),
-     `termination_by` from a `decreases` line (`n - r * r`; does `grind` close the nonlinear step? does
-     `n - r` work?), a loop theorem "at exit the invariant holds and the condition is false" by
-     `fun_induction <;> grind`, then the function's `ensures` from it with a `grind_pattern` (D31). The same
-     for `for i in a until b` summing a list (measure `b - i`, so no `decreases`). Compare with keeping
-     `Id.run do` and using `mvcgen`/`vcgen` (`trials/lean/loop.lean` has a working `mvcgen` proof): measure
-     what `import Std.Tactic.Do` costs here. Then decide (D33) and build. (3) loops: `for` over
+     **Next step (night 7 step 4): finish the comparison, then decide D33.** Route A is validated; route B
+     has three unknowns, one short probe each (extend `trials/lean/loops_mvcgen.lean`): (1) the two prelude
+     lemmas that let `grind` close a range `for` (`(lo...=hi).toList = pref ++ cur :: suff -> cur = lo +
+     pref.length`, and the list's length; same for `...<`); (2) a loop with two variables (gcd: what order
+     does the state tuple come in?); (3) a loop with an early `return` (a find loop). **B wins if all three
+     go through with invariant terms clc could write mechanically from `invariant`/`decreases` lines; if any
+     needs hand-shaped proof steps, take A.** Then the build, in order: front end for `invariant` and
+     `decreases` lines (parse, check, SPEC); proofs for `while` and range `for` with simple bodies; then
+     `break`/`continue`/early `return`, list `for`, nested loops; the function's `requires` as free facts
+     inside the loop; a run-time check that `decreases` goes down. (3) loops: `for` over
      ranges first, with `invariant` lines, likely by emitting the loop as a local recursive function; then
      `while` with a `decreases` measure; (4) a `grind` heartbeat cap that degrades to the `clUnproved` axiom (a timeout is an error today).
      Optional anytime: a precompiled prelude module (saves ~40% of the C compile).
