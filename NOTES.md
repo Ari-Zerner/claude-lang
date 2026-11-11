@@ -564,7 +564,16 @@ design and its decisions (D1...).
      with the path condition or a model where traps are visible (D31 says why); (2) a counterexample for an unproved `ensures`:
      **done, D32 (night 7 steps 1-2)**, by calling the function on small inputs and its own literals.
      Follow-ups left, small: lists longer than four items from a tiny item pool; maybe search functions with
-     no contract for crashes (run it over the trial corpus first to see how much it flags); (3) loops: `for` over
+     no contract for crashes (run it over the trial corpus first to see how much it flags).
+     **Next step (night 7 step 3): a hand-written Lean probe for loops, `trials/lean/loops.lean`, before
+     building anything.** isqrt's `while` as a recursive function over the loop's variables (a run-time
+     `invariant` check first, so the invariant and the condition are hypotheses, as `requires` are in D29),
+     `termination_by` from a `decreases` line (`n - r * r`; does `grind` close the nonlinear step? does
+     `n - r` work?), a loop theorem "at exit the invariant holds and the condition is false" by
+     `fun_induction <;> grind`, then the function's `ensures` from it with a `grind_pattern` (D31). The same
+     for `for i in a until b` summing a list (measure `b - i`, so no `decreases`). Compare with keeping
+     `Id.run do` and using `mvcgen`/`vcgen` (`trials/lean/loop.lean` has a working `mvcgen` proof): measure
+     what `import Std.Tactic.Do` costs here. Then decide (D33) and build. (3) loops: `for` over
      ranges first, with `invariant` lines, likely by emitting the loop as a local recursive function; then
      `while` with a `decreases` measure; (4) a `grind` heartbeat cap that degrades to the `clUnproved` axiom (a timeout is an error today).
      Optional anytime: a precompiled prelude module (saves ~40% of the C compile).
