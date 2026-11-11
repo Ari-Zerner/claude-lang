@@ -207,11 +207,25 @@ end fn name
     example isqrt(10) == 3
     var r = 0
     while (r + 1) * (r + 1) <= n
+      invariant r >= 0 and r * r <= n
+      decreases n - r * r
       r = r + 1
     end while
     return r
   end fn isqrt
   ```
+- **`invariant` and `decreases` lines** go first in a loop's body, and they are how an `ensures` gets
+  proved through a loop. `invariant <Bool>` says what is true every time the loop is about to test
+  its condition: before the first pass, after each pass, and when the loop ends. So after the loop,
+  the invariant holds and the condition doesn't; above, that is exactly the `ensures`. Pick an
+  invariant that is true at the start, that one pass keeps true, and that says enough about the
+  variables the loop changes. A `while` also needs one `decreases <Int>`: a number that is never
+  negative there and gets smaller on every pass, which is why the loop stops. A `for` needs no
+  `decreases`. In `for i in a until b`, `i` in an invariant is the next index (`b` once the loop is
+  over); `for x in xs` can't name `x` in one, so loop over an index to say something about the
+  items seen so far. These lines may use the function's parameters and the variables the loop
+  assigns. A loop with no `invariant` still runs; the `ensures` after it is just less likely to be
+  proved, and the `unproved` warning says which loop and what it lacks.
 
 ## Calls
 

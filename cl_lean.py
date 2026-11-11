@@ -100,9 +100,11 @@ def clHex (s : String) : String :=
     let d := "0123456789abcdef".toList
     String.ofList [d[(b.toNat / 16)]!, d[(b.toNat % 16)]!])
 
-/-- Examples (D8): `EXRUN i` goes straight to the real stdout before the example's values are computed (they're
-thunks), so when one stops the program, clc knows which. -/
-def clExRun (i : Nat) : IO Unit := clRealOut "/dev/stdout" s!"EXRUN {i}"
+/-- Examples (D8): `EXRUN i` goes straight out before the example's values are computed (they're thunks), so when
+one stops the program, clc knows which. To stderr, where nothing else is written: Lean buffers its own stdout
+in blocks, and a line written straight to stdout can land in the middle of one of Lean's (it once split a
+`#print axioms` line, and a proved `ensures` was reported unproved). -/
+def clExRun (i : Nat) : IO Unit := clRealOut "/dev/stderr" s!"EXRUN {i}"
 @[noinline] def clExBool (i : Nat) (ok : Unit → Bool) : IO Unit := do
   clExRun i
   if !ok () then IO.println s!"EXFAIL {i}"
@@ -160,7 +162,7 @@ def clSmallArrays {α : Type} (xs : Array α) (len cap : Nat) : Array (Array α)
 def clSmallOption {α : Type} (xs : Array α) : Array (Option α) := #[none] ++ xs.map some
 def clSmallResult {α ε : Type} (xs : Array α) (es : Array ε) : Array (ClResult α ε) := xs.map .ok ++ es.map .err
 
-/-- One call: its `CXRUN` line reaches the real stdout before anything is computed (`run` is a thunk), so when the
+/-- One call: its `CXRUN` line goes straight to stderr before anything is computed (`run` is a thunk), so when the
 call stops the program or never returns, clc knows which call it was. `none` = the `requires` turned it away. -/
 @[noinline] def clCxCase (h : IO.FS.Handle) (line : String) (run : Unit → Option String) : IO Nat := do
   h.putStrLn line
@@ -169,7 +171,7 @@ call stops the program or never returns, clc knows which call it was. `none` = t
   | none => return 0
   | some s => return s.length + 1
 def clCxFn (name : String) (body : IO.FS.Handle → Nat → IO (Nat × Nat)) : IO Unit := do
-  let h ← IO.FS.Handle.mk "/dev/stdout" .append
+  let h ← IO.FS.Handle.mk "/dev/stderr" .append
   let t0 ← IO.monoMsNow
   let (n, sum) ← body h t0
   h.putStrLn s!"CXDONE {name} {n} {(← IO.monoMsNow) - t0} {sum}"
@@ -454,6 +456,54 @@ def ends_in_return(stmts):
     return False
 
 
+LOOP_IMPORT = ("import Std.Tactic.Do\nopen Std.Do\nset_option linter.deprecated.syntax false\n"
+               "set_option linter.unusedSimpArgs false\n")
+
+LOOP_PRELUDE = r"""
+-- Proofs about loops (D33): what `grind` needs to know about a `for` over a range, and about `%`.
+/-- In a `for` over a range, the item after a prefix is the start plus the prefix's length, and inside the
+range. -/
+theorem clRco_cur {lo hi cur : Int} {pref suff : List Int} (h : (lo...hi).toList = pref ++ cur :: suff) :
+    cur = lo + pref.length ∧ cur < hi := by
+  have h1 : (lo...hi).toList[pref.length]? = some cur := by simp [h]
+  rw [Int.getElem?_toList_rco_eq_some_iff] at h1
+  omega
+theorem clRcc_cur {lo hi cur : Int} {pref suff : List Int} (h : (lo...=hi).toList = pref ++ cur :: suff) :
+    cur = lo + pref.length ∧ cur ≤ hi := by
+  have h1 : (lo...=hi).toList[pref.length]? = some cur := by simp [h]
+  rw [Int.getElem?_toList_rcc_eq_some_iff] at h1
+  omega
+grind_pattern clRco_cur => (lo...hi).toList, pref ++ cur :: suff
+grind_pattern clRcc_cur => (lo...=hi).toList, pref ++ cur :: suff
+/-- `%` by a positive number, in the form a `decreases y` proof needs (`clMod_bound` speaks of `natAbs`). -/
+theorem clMod_pos (a b : Int) (m : String) (h : 0 < b) : 0 ≤ clMod a b m ∧ clMod a b m < b := by
+  have hb : b ≠ 0 := by omega
+  simp only [clMod, beq_iff_eq, hb, ite_false]; exact ⟨Int.emod_nonneg a hb, Int.emod_lt_of_pos a h⟩
+grind_pattern clMod_pos => clMod a b m
+"""
+
+# The one tactic that closes every goal `mvcgen` leaves (D33): drop the trap messages and the list lengths, then grind.
+LOOP_TACTIC = ("(mleave; (try simp only [clTrap, List.length_append, List.length_cons, List.length_nil, "
+               "Int.length_toList_rcc, Int.length_toList_rco] at *); grind [clMod_bound, clDiv])")
+
+
+def assigned_in(stmts):
+    """Names assigned anywhere in these statements; `xs[i] = v` and `p.x = v` assign `xs` and `p`."""
+    out = {n.name for n in nodes_of(stmts, "assign")}
+    for kind in ("setindex", "setfield"):
+        for n in nodes_of(stmts, kind):
+            t = n.target
+            while t.kind in ("index", "field"):
+                t = t.base
+            out.add(t.name)
+    return out
+
+
+def names_in(e):
+    """Variables an expression mentions (not enum variants)."""
+    return [n.name for n in nodes_of(e, "name") if not getattr(n, "variant", None)]
+
+
 class LeanEmitter:
     def __init__(self, fns, structs, path):
         self.fns, self.path = fns, path
@@ -530,6 +580,8 @@ class LeanEmitter:
         if probe:
             return "\n".join(out) + "\n"
         self.spec_theorems(out)
+        if self.loop_proofs:
+            out.insert(0, LOOP_IMPORT)  # `mvcgen`; an import has to come first
         out.append("")
         out.append("-- examples (D8), run while Lean elaborates this file")
         for i, s in enumerate(self.examples):
@@ -795,6 +847,89 @@ class LeanEmitter:
             out += [{f.name: (f"v_{p}.toNat", tactic(f)) for f in fs} for p in common if p in compared]
         return out[:MAX_CANDIDATES]
 
+    def loop_plan(self, f, comp):
+        """How to prove fn f's `ensures` when it has loops (D33): the terms `mvcgen` asks for, one per `for`
+        and two per `while` (variant, invariant), in source order; or (None, why) when a loop is beyond what
+        clc can state yet. A term can only mention what's in scope in the theorem (the parameters) and the
+        loop's state, which `mvcgen` passes as a tuple of the `var`s the loop assigns, in the order they were
+        declared (after an `Option` holding the value of a `return` inside the loop, if there is one)."""
+        loops = sorted(nodes_of(f.body, "while") + nodes_of(f.body, "for"), key=lambda n: (n.tok.line, n.tok.col))
+        loops = list({id(n): n for n in loops}.values())
+        if self.is_recursive(comp):
+            return None, f"fn {f.name} is recursive and has a loop, and clc can't prove that combination yet"
+        lets = {n.name: n for n in nodes_of(f.body, "let")}
+        order = [n for n in lets if lets[n].mutable]
+        params = {n for n, _, _ in f.params}
+        ens = contracts(f, "ensures")
+        terms = []
+        for lp in loops:
+            line = lp.tok.line
+            word = f"the `{lp.kind}` on line {line}"
+            if nodes_of(lp.body, "while") or nodes_of(lp.body, "for"):
+                return None, f"{word} has another loop inside it, and clc can't prove nested loops yet"
+            if nodes_of(lp.body, "break"):
+                return None, f"{word} has a `break`, and clc can't prove a loop with one yet"
+            invs = getattr(lp, "invariants", [])
+            dec = getattr(lp, "decreases", None)
+            if lp.kind == "while" and dec is None:
+                return None, f"{word} has no `decreases` line, so clc can't show that it stops"
+            if lp.kind == "for" and lp.rev:
+                return None, f"{word} counts down (`reversed`), and clc can't prove that yet"
+            inner = {n.name for n in nodes_of(lp.body, "let")}
+            state = [v for v in order if v in assigned_in(lp.body) and v not in inner]
+            index = lp.var if lp.kind == "for" and lp.src is None else None
+            ok = params | set(state) | ({index} if index else set())
+            for h in invs + ([dec] if dec else []):
+                bad = [n for n in names_in(h.expr) if n not in ok]
+                if bad:
+                    return None, (f"`{h.kind} {h.text}` (line {h.tok.line}) mentions `{bad[0]}`, a local variable "
+                                  f"the loop doesn't change, and so far clc can only use parameters and the "
+                                  f"variables the loop assigns there")
+            if lp.kind == "for":
+                bad = [n for e in (lp.src, lp.lo, lp.hi) if e is not None for n in names_in(e) if n not in params]
+                if bad:
+                    return None, (f"{word} runs over something made from a local variable (`{bad[0]}`), and so "
+                                  f"far clc can only prove a loop over a range or list made from parameters")
+
+            def bind(tup):
+                """`let v_a := tup.1; let v_b := tup.2; `: the loop's variables out of its state."""
+                out = ""
+                for j, v in enumerate(state):
+                    proj = tup if len(state) == 1 else tup + ".2" * j + (".1" if j < len(state) - 1 else "")
+                    out += f"let v_{v} : {ltype(lets[v].var_ty, v)} := {proj}; "
+                return out
+            inv = " && ".join(f"({self.expr(h.expr)})" for h in invs) or "true"
+            returns = bool(nodes_of(lp.body, "return"))
+            self.names = {"result": "cl_v"}
+            ensured = " ∧ ".join(f"({self.expr(c.expr)}) = true" for c in ens) or "True"
+            self.names = {}
+            if lp.kind == "while":
+                st, ret = ("cl_s.2", "cl_s.1") if returns else ("cl_s", None)
+                cond = self.expr(lp.cond)
+                during = f"{bind(st)}({inv}) = true"
+                after = f"{bind(st)}({inv}) = true ∧ ¬ ({cond}) = true"
+                if returns:
+                    during = f"(∀ cl_v, {ret} = some cl_v → {ensured}) ∧ ({ret} = none → {during})"
+                    after = f"(∀ cl_v, {ret} = some cl_v → {ensured}) ∧ ({ret} = none → {after})"
+                terms.append(f"fun cl_s => {bind(st)}⟨({self.expr(dec.expr)}).toNat⟩")
+                terms.append(f"⇓ cl_x => match cl_x with | .inl cl_s => ⌜{during}⌝ | .inr cl_s => ⌜{after}⌝")
+            else:
+                st, ret = ("cl_x.2.2", "cl_x.2.1") if returns else ("cl_x.2", None)
+                at = f"let v_{index} : Int := {self.expr(lp.lo)} + cl_x.1.prefix.length; " if index else ""
+                during = f"{at}{bind(st)}({inv}) = true"
+                if returns:
+                    during = f"(∀ cl_v, {ret} = some cl_v → {ensured}) ∧ ({ret} = none → {during})"
+                terms.append(f"⇓ cl_x => ⌜{during}⌝")
+        bare = [lp for lp in loops if not getattr(lp, "invariants", [])]
+        if bare:
+            why = (f"the `{bare[0].kind}` on line {bare[0].tok.line} has no `invariant` line saying what stays "
+                   f"true as it runs, and without one clc's automation didn't find a proof")
+        else:
+            why = ("clc couldn't prove it from the `invariant` lines: either one doesn't hold when its loop "
+                   "starts, or a pass of the loop doesn't keep it, or a `decreases` doesn't get smaller, or "
+                   "together they aren't enough for this `ensures`")
+        return terms, why
+
     def spec_theorems(self, out):
         """D30: each `ensures` of a pure, total function as a theorem whose hypotheses are its `requires`, proved
         by a fixed list of tactics with the callees' `ensures` theorems as lemmas (modular, D31). One that isn't
@@ -802,6 +937,8 @@ class LeanEmitter:
         and `#print axioms` tells "proved" from "proved, assuming g's unproved `ensures`" from "not proved".
         `self.specs` lists (fn, ensures line, theorem or None, why not)."""
         self.specs = []
+        self.loop_proofs = False  # some theorem below uses `mvcgen`, so the file needs its import
+        self.loop_why = {}        # fn name -> why its `ensures` isn't proved, when the reason is a loop
         for comp in self.comps:
             for name in comp:
                 f = self.by_name[name]
@@ -829,6 +966,18 @@ class LeanEmitter:
                 tactics = [f"(unfold {self.lname(name)}; grind {hints})"]
                 if self.is_recursive(comp):
                     tactics.insert(0, f"(fun_induction {self.lname(name)} {args} <;> grind {hints})")
+                if nodes_of(f.body, "while") or nodes_of(f.body, "for"):
+                    # D33: the loops stay as they are; `mvcgen` turns the function and each loop's invariant
+                    # into goals, and one tactic closes them. A term it can't use just fails this alternative.
+                    terms, self.loop_why[name] = self.loop_plan(f, comp)
+                    if terms is not None:
+                        if not self.loop_proofs:
+                            out.append(LOOP_PRELUDE)
+                            self.loop_proofs = True
+                        script = [f"(generalize cl_h : {call} = cl_r", "     apply Id.of_wp_run_eq cl_h", "     mvcgen"]
+                        script += [f"     case inv{i + 1} => exact {t}" for i, t in enumerate(terms)]
+                        script.append(f"     all_goals {LOOP_TACTIC})")
+                        tactics = ["\n".join(script)]
                 for j, c in enumerate(ens):
                     thm = f"clSpec_{name}_{j}"
                     self.names = {"result": call}
@@ -864,9 +1013,8 @@ class LeanEmitter:
                 own = "clUnproved_" + thm[len("clSpec_"):]
                 assumed = sorted(a for a in used if a.startswith("clUnproved_") and a != own)
                 if own in used or "sorryAx" in used:
-                    loops = [k for k in ("while", "for") if nodes_of(f.body, k)]
-                    why = (f"it has a `{loops[0]}` loop, and clc can't prove things about loops yet" if loops
-                           else "clc's automation (`grind`, with induction for recursion) didn't find a proof")
+                    why = (self.loop_why.get(f.name) or
+                           "clc's automation (`grind`, with induction for recursion) didn't find a proof")
                 elif assumed:
                     parts = []
                     for a in assumed:

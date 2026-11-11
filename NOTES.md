@@ -589,6 +589,28 @@ design and its decisions (D1...).
   proofs are in, the lines do nothing, and SPEC is what a model is told is true.
   **Lean 39/39, C 32/32 + 3 skipped.**
 
+- 2026-11-11 (night 7, step 6): **D33 (b): functions with loops are proved.** `cl_lean.py`: `loop_plan`
+  (per function: the terms `mvcgen` asks for, or the obstacle), `LOOP_PRELUDE` (the two range lemmas,
+  `clMod_pos`), `LOOP_TACTIC`, `LOOP_IMPORT` (inserted at the top only when some theorem uses `mvcgen`);
+  `spec_theorems` swaps D30's `unfold; grind` for the `mvcgen` script when the function has loops;
+  `read_specs` takes its reason from `loop_why`. Shapes confirmed first: the state is the tuple of the
+  assigned `var`s in declaration order whatever the order of assignment (`Int × Bool × Array Int`), a lone
+  variable is no tuple, loops are numbered in source order with a `while` taking two numbers (variant,
+  invariant), a list `for` runs over `xs.toList`, and locals are not in scope in an invariant goal (hence
+  "parameters and the loop's own variables only").
+  **Results:** `tests/ok/contracts.cl` goes from 5 to 7 of 10 `ensures` proved (isqrt's two, through its
+  `while`); `tests/ok/invariants.cl` proves 5 of 7: isqrt, triangle, gcd (two `invariant` lines),
+  count_small (a list `for`), first_square (a `return` inside a `for`, no `invariant` needed). The two
+  left are meant to be: count_big's `c <= length(xs)` is true but not kept by a pass, and halve's `while`
+  has no `decreases`. SPEC.md documents the lines now (2.4k words).
+  **A bug in our own output protocol, found here:** the examples' `EXRUN` lines were written straight to
+  stdout, which Lean block-buffers, so one could land inside a line of Lean's: it split
+  `'clSpec_first_square_0' depends on axioms: ...` into `'clSpec_fiEXRUN 0`, and a proved `ensures` was
+  reported unproved (never the other way round: an unreadable line counts as unproved). `EXRUN`, and the
+  search's `CXRUN`/`CXDONE`, now go to stderr, where nothing else is written.
+  **Lean 39/39** (the full run had one failure, `example-endless`, from the stderr change dropping its `EXRUN`
+  lines; fixed and that test and the other ten example/contract/invariant tests re-run), **C 32/32 + 3 skipped.**
+
 ## Next step
 1. **Formal verification** (Ari, 2026-11-07: "we definitely want proofs, not just fuzzing"; see
    DESIGN.md open questions): contracts (`requires`/`ensures`), build-time counterexample search,
@@ -624,10 +646,12 @@ design and its decisions (D1...).
      **D33 is decided (night 7 step 4): `invariant`/`decreases` lines, proved by `mvcgen` on the loop as
      emitted.** Build order, one step each:
      (a) **front end: done (night 7 step 5)**, except the SPEC paragraph, which goes in with (b).
-     (b) **proofs (next):** in `spec_theorems`, a function with loops gets the `mvcgen` script from
-     `trials/lean/loops_mvcgen.lean` (state tuple = the loop's assigned `var`s in declaration order;
-     `import Std.Tactic.Do` + the three lemmas only when needed); `unproved` reasons name the loop and what
-     it lacks. isqrt in `tests/ok/contracts.cl` should then prove.
+     (b) **proofs: done (night 7 step 6)** for loops that aren't nested, have no `break`, and whose lines
+     mention only parameters and the loop's own variables.
+     **Next, pick by value:** locals in invariants (the commonest limit: `let n = length(xs)` before a loop;
+     maybe pass them as extra hypotheses, or inline their definitions); a trial: give Haiku/Sonnet the new
+     SPEC paragraph and five loop functions with `ensures`, and see whether the invariants they write prove;
+     which goal failed (entry / kept / enough), by closing each with its own axiom; then (c) and (d).
      (c) run-time checks: each `invariant` (not as an early `return`: try `v := clGuard ok msg v` on one state
      variable) and "`decreases` went down", so D32's search can show a false invariant with its input.
      (d) `break`, nested loops (find out how `inv1..invN` are numbered), `for x in xs`, `reversed`.

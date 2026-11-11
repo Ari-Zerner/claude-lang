@@ -3049,7 +3049,8 @@ def run_examples(exe, em, d):
 def example_diags(out, err, timed_out, em, d):
     """Turn the EXRUN/EXFAIL/EXDONE lines either backend prints for its examples into diagnostics."""
     last, done = None, False
-    for line in out.splitlines():
+    # The C binary prints everything on stdout; Lean's `EXRUN` lines are on stderr (see `clExRun`).
+    for line in out.splitlines() + err.splitlines():
         parts = line.split()
         if not parts:
             continue
@@ -3082,7 +3083,8 @@ def example_diags(out, err, timed_out, em, d):
         if timed_out:
             d.error("example-timeout", "example didn't finish within 10 s", s.tok.line, s.tok.col, 7)
         else:
-            why = err.strip().splitlines()[-1] if err.strip() else "it crashed"
+            said = [ln for ln in err.splitlines() if ln.strip() and not ln.startswith("EXRUN ")]
+            why = said[-1] if said else "it crashed"
             d.error("example-crashed", f"example stopped the program: {why}", s.tok.line, s.tok.col, 7)
 
 
@@ -3131,8 +3133,9 @@ CX_HANG_S = 2.0  # CPU seconds one call may take before the search gives up on i
 
 
 def run_search(lean, src, tmp):
-    """Elaborate one counterexample-search file (D32), watching its output: (stdout lines, stderr, exit code,
-    "hang" | "slow" | None). "hang": the call named by the last `CXRUN` line used CX_HANG_S of CPU without
+    """Elaborate one counterexample-search file (D32), watching its output: (stdout lines, stderr lines, exit
+    code, "hang" | "slow" | None). The `CXRUN`/`CXDONE` lines are on stderr, written as they happen (see
+    `clExRun` for why not stdout). "hang": the call named by the last `CXRUN` line used CX_HANG_S of CPU without
     returning, so it was killed. CPU time, not wall time, so a box that's swapping doesn't look like a loop.
     The 16 MB stack makes endless non-tail recursion stop within a second ("deep recursion was detected");
     with Lean's default it grows by ~100 MB a second instead."""
@@ -3167,13 +3170,13 @@ def run_search(lean, src, tmp):
             break
         except subprocess.TimeoutExpired:
             pass
-        now, n = time.monotonic(), len(lines)
+        now, n = time.monotonic(), len(errs)
         if n != seen:
             seen, mark_cpu, mark_wall = n, cpu(), now
             continue
         c = cpu()
         used = c - mark_cpu if c is not None and mark_cpu is not None else (now - mark_wall) / 3
-        if seen and lines[seen - 1].startswith("CXRUN ") and used >= CX_HANG_S:
+        if seen and errs[seen - 1].startswith("CXRUN ") and used >= CX_HANG_S:
             how = "hang"
         elif now - start > 120:
             how = "slow"
@@ -3183,7 +3186,7 @@ def run_search(lean, src, tmp):
             break
     for t in readers:
         t.join(timeout=5)
-    return list(lines), "\n".join(errs), p.returncode, how
+    return list(lines), list(errs), p.returncode, how
 
 
 def cx_search(lean, em, targets, tmp):
@@ -3215,10 +3218,12 @@ def cx_search(lean, em, targets, tmp):
     for _ in range(CX_ROUNDS):
         if not todo:
             break
-        lines, err, code, how = run_search(lean, first if todo == targets else em.emit_search(todo), tmp)
+        lines, errs, code, how = run_search(lean, first if todo == targets else em.emit_search(todo), tmp)
         sfile = os.path.join(tmp, "Search.lean")
+        said = [ln for ln in errs if ln.strip() and not ln.startswith("CX")]
+        err = "\n".join(said)
         last = None
-        for ln in lines:
+        for ln in errs:
             if ln.startswith("CXRUN "):
                 last = ln.split(" ", 2)[1:]
             elif ln.startswith("CXDONE "):
@@ -3228,7 +3233,7 @@ def cx_search(lean, em, targets, tmp):
                 last is None and how is None and (code != 0 or "CXEND" not in lines)):
             kept = os.path.join(tempfile.mkdtemp(prefix="clc-"), "Search.lean")
             shutil.copy(sfile, kept)
-            shown = "\n".join(ln for ln in lines if not ln.startswith("CX"))
+            shown = "\n".join(lines)
             print(f"clc: internal error: the generated counterexample search didn't check (this is a compiler "
                   f"bug). Lean kept at {kept}\n{shown[:4000]}{err[:2000]}", file=sys.stderr)
             return None
@@ -3236,7 +3241,7 @@ def cx_search(lean, em, targets, tmp):
             sure = sure and how != "slow"
             break
         fn, call = last
-        why = err.strip().splitlines()[-1] if err.strip() else ""
+        why = said[-1] if said else ""
         if how == "hang":
             findings[fn] = ("hang", call, "")
         elif code == 70:
@@ -3362,8 +3367,10 @@ def lean_main(args, d, fns, structs):
             out = te.stdout.decode() if isinstance(te.stdout, bytes) else (te.stdout or "")
             err, code, timed_out = "", None, True
         lean_errors = [ln for ln in out.splitlines() if ln.startswith(lfile + ":") and ": error" in ln]
-        if code not in (0, 70) and "deep recursion was detected" in err and "EXRUN" in out and not lean_errors:
-            code, err = 70, "its recursion got too deep; it probably never stops"
+        if code not in (0, 70) and "deep recursion was detected" in err and "EXRUN" in err and not lean_errors:
+            code = 70  # report it as the example stopping the program; keep the `EXRUN` lines that say which
+            err = "\n".join([ln for ln in err.splitlines() if ln.startswith("EXRUN ")]
+                            + ["its recursion got too deep; it probably never stops"])
         if lean_errors or (code not in (0, 70) and not timed_out):
             keep_tmp = True
             shown = "\n".join(ln for ln in out.splitlines() if not ln.startswith("EX"))

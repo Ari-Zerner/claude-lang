@@ -3,8 +3,8 @@
 # a hypothesis inside the body, so `down` below is total (D28); `ensures` is checked at each `return`, with
 # `result` naming the value. The failures are in tests/err/contracts-run.cl.
 # total: down count_digits
-# An `ensures` marked `# unproved` must be one clc can't prove (D30), and every other must be proved: isqrt's
-# (a `while` loop), wrong_abs's (false for x < -5000000, which nothing here reaches), steps's (clc can't show it
+# An `ensures` marked `# unproved` must be one clc can't prove (D30), and every other must be proved (isqrt's
+# two through its loop, from the `invariant` and `decreases` lines, D33): wrong_abs's (false for x < -5000000, which nothing here reaches), steps's (clc can't show it
 # stops) and double_abs's (it follows from wrong_abs's, D31). digits_plus is proved from count_digits's.
 # None of them has a counterexample clc's search finds (D32): those are in tests/err/contracts-search.cl and
 # contracts-seeds.cl.
@@ -15,12 +15,14 @@ end struct Range
 
 fn isqrt(n: Int) -> Int
   requires n >= 0
-  ensures result >= 0  # unproved
-  ensures result * result <= n and (result + 1) * (result + 1) > n  # unproved
+  ensures result >= 0
+  ensures result * result <= n and (result + 1) * (result + 1) > n
   example isqrt(10) == 3
   example isqrt(0) == 0
   var r = 0
   while (r + 1) * (r + 1) <= n
+    invariant r >= 0 and r * r <= n
+    decreases n - r * r
     r = r + 1
   end while
   return r

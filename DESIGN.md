@@ -478,8 +478,8 @@ Claude differs from a human programmer in ways that matter for language design:
     10000, 256 MB holds 100000), more than an example needs; the built program has no such limit.
 
 - **D33. A loop is proved as it stands, with Lean's verification-condition generator, from `invariant` and
-  `decreases` lines.** (2026-11-11, night 7; decided after two probes. Built so far: the front end, which
-  accepts and checks the lines; the proofs come next, and until then the lines change nothing.)
+  `decreases` lines.** (2026-11-11, night 7; decided after two probes, then built: the front end, and the
+  proofs for `while` and `for` loops that aren't nested and have no `break`.)
   - *The lines:* `invariant <Bool>` and `decreases <Int>` at the top of a loop's body, like `requires` and
     `ensures` at the top of a function's. An invariant holds every time the loop is about to test its
     condition: on entry, after each pass, and when it ends. Several lines mean all of them. A `while` needs
@@ -524,6 +524,16 @@ Claude differs from a human programmer in ways that matter for language design:
     the fix is an index loop), and no io. `decreases` on a `for` is `decreases-for`, a second one
     `duplicate-decreases`. `assert` gets a hint pointing at all three words. The C backend refuses a
     program with these lines, as it does contracts.
+  - *What's built (`loop_plan` in `cl_lean.py`):* a function with loops gets the `mvcgen` script instead of
+    D30's `unfold; grind` when every loop is one clc can state: not nested, no `break`, not `reversed`, a
+    `decreases` on each `while`, a range or list made from parameters, and `invariant`/`decreases` lines
+    that mention only parameters and the variables the loop assigns (a goal's context holds nothing else).
+    Otherwise the `unproved` warning names the loop and the obstacle (`the while on line 96 has no
+    decreases line, so clc can't show that it stops`). When the script runs and fails, it says the
+    invariant may not hold at the start, may not be kept, or may not be enough; and when a loop has no
+    `invariant` at all, it says that instead. First results: isqrt, triangle numbers, gcd, a counting loop
+    over a list and a search loop with a `return` inside are proved in the tests; a loop whose invariant
+    is true but not kept by a pass (`c <= length(xs)`, counting matches) correctly stays unproved.
   - *Not yet decided or tried:* a run-time check of each invariant (wanted: then D32's search can show a
     false one with its input; it must not be an early `return`, which would change the loop's shape for the
     proof); a run-time check that `decreases` goes down, so an unproved loop can't hang; `break` (the state
