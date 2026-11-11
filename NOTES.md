@@ -611,6 +611,15 @@ design and its decisions (D1...).
   **Lean 39/39** (the full run had one failure, `example-endless`, from the stderr change dropping its `EXRUN`
   lines; fixed and that test and the other ten example/contract/invariant tests re-run), **C 32/32 + 3 skipped.**
 
+- 2026-11-11 (night 7, wrap-up): six steps. D32: an unproved `ensures` is tested on small inputs and on the
+  function's own literals at build time, and a counterexample is an error (`ensures-false`,
+  `input-crashed`); examples can't recurse away with the box's memory any more. D33: `invariant` and
+  `decreases` lines, decided after probing two routes, then built: front end, and proofs through `while` and
+  `for` loops with Lean's `mvcgen` on the loops as emitted. isqrt is proved end to end. Along the way: the
+  progress lines moved to stderr after one split a line of Lean's output. Nothing is parked half-done;
+  Lean 39/39, C 32/32 + 3 skipped. **Start next time at "Next, pick by value" below** (locals in
+  invariants first, then a trial of whether models write invariants that prove).
+
 ## Next step
 1. **Formal verification** (Ari, 2026-11-07: "we definitely want proofs, not just fuzzing"; see
    DESIGN.md open questions): contracts (`requires`/`ensures`), build-time counterexample search,
