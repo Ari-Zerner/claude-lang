@@ -559,6 +559,22 @@ design and its decisions (D1...).
     in a library that's being replaced, and `for` needs the lemmas above. Later, B's program logic is the
     natural home for "this function never traps" (D31's open item).
 
+- 2026-11-11 (night 7, step 4): **D33 decided: loops are proved as they stand, with `mvcgen` (route B).**
+  The three open probes all went through with invariant terms clc can write mechanically, so by the
+  criterion set in step 3, B wins. `trials/lean/loops_mvcgen.lean` now holds five functions exactly as clc
+  emits them, each `ensures` proved by one recipe inside `first | (...) | exact clUnproved_f_j ...`:
+  isqrt, triangle (`for ... through`), count_up (`for ... until`, a list), gcd (two variables), first_square
+  (an early `return` in a `for`). 4.9 s CPU for the file. A wrong invariant (`r * r < n`) falls back to the
+  axiom without a Lean error, so D31's reporting carries over.
+  What each probe needed: (1) range `for`: `clRco_cur`/`clRcc_cur` (three lines each from
+  `Int.getElem?_toList_rco_eq_some_iff`), with explicit `grind_pattern`s (without them `grind` skipped
+  them in a goal whose invariant doesn't mention the index), and `simp only` with `List.length_append` and
+  `Int.length_toList_rcc/rco` before `grind`; (2) two variables: the state is the tuple of the loop's `var`s
+  in declaration order; projections work where tuple patterns get stuck; (3) early `return`: the state
+  gains an `Option`, the invariant says the `ensures` holds for the returned value, and `simp only
+  [clTrap]` clears the trap messages first. Dead ends on the way: `mleave; simp_all; grind` works for the
+  `for` but takes 6-10 s; passing the cursor lemmas as `grind [...]` arguments instead of patterns.
+
 ## Next step
 1. **Formal verification** (Ari, 2026-11-07: "we definitely want proofs, not just fuzzing"; see
    DESIGN.md open questions): contracts (`requires`/`ensures`), build-time counterexample search,
@@ -591,16 +607,20 @@ design and its decisions (D1...).
      **done, D32 (night 7 steps 1-2)**, by calling the function on small inputs and its own literals.
      Follow-ups left, small: lists longer than four items from a tiny item pool; maybe search functions with
      no contract for crashes (run it over the trial corpus first to see how much it flags).
-     **Next step (night 7 step 4): finish the comparison, then decide D33.** Route A is validated; route B
-     has three unknowns, one short probe each (extend `trials/lean/loops_mvcgen.lean`): (1) the two prelude
-     lemmas that let `grind` close a range `for` (`(lo...=hi).toList = pref ++ cur :: suff -> cur = lo +
-     pref.length`, and the list's length; same for `...<`); (2) a loop with two variables (gcd: what order
-     does the state tuple come in?); (3) a loop with an early `return` (a find loop). **B wins if all three
-     go through with invariant terms clc could write mechanically from `invariant`/`decreases` lines; if any
-     needs hand-shaped proof steps, take A.** Then the build, in order: front end for `invariant` and
-     `decreases` lines (parse, check, SPEC); proofs for `while` and range `for` with simple bodies; then
-     `break`/`continue`/early `return`, list `for`, nested loops; the function's `requires` as free facts
-     inside the loop; a run-time check that `decreases` goes down. (3) loops: `for` over
+     **D33 is decided (night 7 step 4): `invariant`/`decreases` lines, proved by `mvcgen` on the loop as
+     emitted.** Build order, one step each:
+     (a) **front end** (next): keywords `invariant` and `decreases`; parse them as header lines of a loop body;
+     check (Bool / Int, no io, the loop's variables in scope, `decreases` only in a `while` and only once,
+     no `x` of a `for x in xs` in an invariant yet), with targeted errors; C backend refuses them like
+     contracts; the Lean backend ignores them for now; SPEC paragraph; tests ok + err.
+     (b) **proofs:** in `spec_theorems`, a function with loops gets the `mvcgen` script from
+     `trials/lean/loops_mvcgen.lean` (state tuple = the loop's assigned `var`s in declaration order;
+     `import Std.Tactic.Do` + the three lemmas only when needed); `unproved` reasons name the loop and what
+     it lacks. isqrt in `tests/ok/contracts.cl` should then prove.
+     (c) run-time checks: each `invariant` (not as an early `return`: try `v := clGuard ok msg v` on one state
+     variable) and "`decreases` went down", so D32's search can show a false invariant with its input.
+     (d) `break`, nested loops (find out how `inv1..invN` are numbered), `for x in xs`, `reversed`.
+     (3) loops: `for` over
      ranges first, with `invariant` lines, likely by emitting the loop as a local recursive function; then
      `while` with a `decreases` measure; (4) a `grind` heartbeat cap that degrades to the `clUnproved` axiom (a timeout is an error today).
      Optional anytime: a precompiled prelude module (saves ~40% of the C compile).

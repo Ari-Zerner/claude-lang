@@ -477,6 +477,51 @@ Claude differs from a human programmer in ways that matter for language design:
     the 120 s timeout. 64 MB holds between 10000 and 100000 calls inside each other (measured: 16 MB holds
     10000, 256 MB holds 100000), more than an example needs; the built program has no such limit.
 
+- **D33. A loop is proved as it stands, with Lean's verification-condition generator, from `invariant` and
+  `decreases` lines.** (2026-11-11, night 7; decided after two probes, not built yet.)
+  - *The lines:* `invariant <Bool>` and `decreases <Int>` at the top of a loop's body, like `requires` and
+    `ensures` at the top of a function's. An invariant holds every time the loop is about to test its
+    condition: on entry, after each pass, and when it ends. Several lines mean all of them. A `while` needs
+    one `decreases`: an Int that is never negative there and gets smaller on every pass, which is why the
+    loop stops. A `for` needs none. In `for i in a until b`, `i` in an invariant is the next index, so
+    when the loop ends it is `b` (or `a`, if the range was empty).
+  - *The route: nothing that runs changes.* The loop stays the `do` loop clc emits today, and the function's
+    `ensures` theorem is proved by `mvcgen` (Std.Do), which turns the function, the invariant and the
+    variant into separate goals (holds on entry; kept by a pass, and the measure drops; gives the `ensures`
+    at the end), each closed by one fixed tactic (`mleave`, a `simp only` with list and range lengths,
+    `grind`). If any goal fails the theorem falls back to its `clUnproved` axiom exactly as in D31, so
+    reporting doesn't change. Probe (`trials/lean/loops_mvcgen.lean`): isqrt (`while`, nonlinear
+    `ensures`), triangle numbers and a list builder (range `for`), gcd (two loop variables), and a search
+    loop with an early `return` are all proved on the functions as emitted now, 4.9 s CPU together.
+  - *The other route, tried first:* each loop as a recursive function over its variables, with a loop
+    theorem by `fun_induction <;> grind` (`trials/lean/loops.lean`). It also proved everything tried, runs
+    as fast, and uses only what D28 and D30 use. It lost because clc would have to translate loops into
+    recursion itself, with `break`, `continue`, early `return` and nesting each handled by hand, which is a
+    second way to emit every loop and a new place for the program that runs to drift from the one written.
+    With `mvcgen` there is nothing new to trust: a wrong invariant term can only make a proof fail.
+  - *What clc writes for a loop:* the state is the tuple of the `var`s the loop assigns, in the order they
+    were declared, read with projections (`cl_s.1`), not tuple patterns, which get stuck when the state is
+    an unknown. `while`: a variant `fun s => (decreases).toNat` and an invariant with two cases, during
+    (the invariant) and after (the invariant and not the condition). Range `for`: one invariant over a
+    cursor into the range's list, with `i := start + prefix.length`. A `return` inside a loop adds an
+    `Option` to the state, and the invariant adds "the `ensures` holds for the value returned".
+  - *What it needed:* two lemmas about a range's list (the item after a prefix is the start plus the
+    prefix's length, and lies inside the range) with explicit `grind_pattern`s; `clMod_pos` (`0 <= a % b <
+    b` for `b > 0`); unfolding `clTrap` before `grind`, so the long messages are gone. `import
+    Std.Tactic.Do` costs ~0.3 s CPU, and only files with a loop to prove need it.
+  - *A function's `requires` are hypotheses of every goal,* so `invariant` lines don't have to repeat them
+    (the recursive route would have needed that).
+  - *Risk taken knowingly:* in Lean 4.35 `mvcgen` is marked deprecated in favour of `vcgen`, which is marked
+    experimental, lives in another library and doesn't work as a drop-in. This project pins its Lean, so it
+    matters only on an upgrade, and the terms clc writes come from one place.
+  - *Corrected on the way:* NOTES said Lean's `while` is `partial` inside. In 4.35 it isn't (`Loop.forIn` is
+    `repeatM`, with invariant and variant rules), which is what makes this route possible.
+  - *Not yet decided or tried:* a run-time check of each invariant (wanted: then D32's search can show a
+    false one with its input; it must not be an early `return`, which would change the loop's shape for the
+    proof); a run-time check that `decreases` goes down, so an unproved loop can't hang; `break` (the state
+    at a `break` isn't "the invariant and not the condition"); nested loops; `for x in xs` (the invariant
+    can't name what has been seen so far; an index loop can); `reversed`; a recursive function with a loop.
+
 ## Open questions
 
 - Memory management: value semantics with copy-on-write (D19); nothing is freed yet.
