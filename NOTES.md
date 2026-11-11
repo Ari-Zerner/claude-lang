@@ -496,6 +496,27 @@ design and its decisions (D1...).
   unproved). The test now marks unproved `ensures` inline (`ensures ...  # unproved`) instead of a line-number
   list, which broke the moment a comment line was added. **Lean 34/34** (contracts re-run after the marker change), **C 31/31 + 1 skipped.**
 
+- 2026-11-11 (night 7, step 1): **D32: an unproved `ensures` is tested on small inputs at build time, and a
+  counterexample is an error.** `cl_lean.py`: `SEARCH_PRELUDE` (`clSmallInt`/`clSmallArrays`/..., `clCxCase`,
+  `clCxFn`), `small_of` (small values of any type, no type classes, like `fmt_of`), `small_decls` (a
+  `T_Name.clSmall` per struct and enum; a type that contains itself draws from one depth lower),
+  `search_block`, `emit_search`. `clc.py`: `run_search` (streams the output; kills a call after 2 s of CPU),
+  `cx_search` (rounds, cache in `~/.cache/clc/search/`, keyed on clc's own source too), `search_diags`.
+  New codes: `ensures-false` and `input-crashed` (errors), `input-timeout` (warning); an `unproved` warning
+  with no finding now ends "clc called it on N small inputs and none broke it".
+  **It found the bug planted in our own test at once:** `wrong_abs(x: -6) returns -6` in
+  `tests/ok/contracts.cl`, which the file's comment said "no example or call reaches". That function now
+  hides its bug below -5000, `spin` (never stops for a negative n: now `input-crashed`) gave way to `steps`
+  (stops, but by flipping the sign, so D28 can't show it), and the findings moved to the new
+  `tests/err/contracts-search.cl`: a false `ensures`, an index into an empty list, a callee's broken
+  `requires`, endless recursion; a caller stopped by its callee's false `ensures` isn't reported twice.
+  Cost: ~1.2 s CPU per search run (one run when nothing is found, one more per finding); 3000 calls take
+  0.2-0.3 s. `clc test tests/err/contracts-search.cl`: 15 s the first time here (five Lean runs), 2.3 s cached.
+  Hazards found: endless non-tail recursion grows Lean's interpreter by ~100 MB/s (the search runs with
+  `lean -s 16384`, which stops it in a second; **the main run's examples still have that hazard**), and an
+  endless `while` needs a CPU-time limit, since wall time on this box lies.
+  **Lean 35/35** (the full run plus a re-run of the four contracts tests after the last edits), **C 31/31 + 2 skipped.**
+
 ## Next step
 1. **Formal verification** (Ari, 2026-11-07: "we definitely want proofs, not just fuzzing"; see
    DESIGN.md open questions): contracts (`requires`/`ensures`), build-time counterexample search,
@@ -524,8 +545,11 @@ design and its decisions (D1...).
      at run time: **done, D29 (night 6 step 4)**. (c) Proofs: **started, D30 (night 6 step 5)**: each `ensures` of a pure, total function is proved by
      `grind` (with functional induction for recursion) or reported `unproved`. **Next, in order:** (1) modular
      proofs: **done, D31 (step 6)**, except proving each call's `requires`, which needs per-call-site theorems
-     with the path condition or a model where traps are visible (D31 says why); (2) a counterexample for an unproved `ensures` (Lean's `plausible`? not in
-     core; or clc evaluates the function on small inputs with the examples' machinery); (3) loops: `for` over
+     with the path condition or a model where traps are visible (D31 says why); (2) a counterexample for an unproved `ensures`:
+     **done, D32 (night 7 step 1)**, by calling the function on small inputs. Follow-ups, small: seed the Int
+     values with the function's own literals ±1 (a bracket at 40000 is out of reach today); lists longer than
+     four items from a tiny item pool; give the main run's examples the 16 MB stack too; maybe search
+     functions with no contract for crashes (run it over the trial corpus first to see how much it flags); (3) loops: `for` over
      ranges first, with `invariant` lines, likely by emitting the loop as a local recursive function; then
      `while` with a `decreases` measure; (4) a `grind` heartbeat cap that degrades to the `clUnproved` axiom (a timeout is an error today).
      Optional anytime: a precompiled prelude module (saves ~40% of the C compile).

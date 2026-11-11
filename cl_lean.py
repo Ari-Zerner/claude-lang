@@ -118,6 +118,85 @@ class Unsupported(Exception):
     """The program uses something the Lean backend can't emit yet."""
 
 
+CX_CAP = 3000    # the counterexample search (D32): most values of one type at one depth, and most calls per function
+CX_TRIED = 30000  # most inputs looked at per function, counting those its `requires` turn away
+CX_DEPTHS = 24   # depths 0..23: an Int parameter runs over -16..16, then edges up to ±1000 (`clSmallInt`)
+CX_MS = 1500     # and no longer than this per function
+
+SEARCH_PRELUDE = r"""
+-- Counterexample search (D32): small values of each type, smallest first, and the loop that tries them.
+set_option linter.unusedVariables false
+/-- 0, 1, -1, ... up to ±d through depth 16; each depth after that adds three of the usual edges. -/
+def clSmallInt (d : Nat) : Array Int := Id.run do
+  let mut out : Array Int := #[0]
+  for i in [1:(min d 16)+1] do
+    out := (out.push (i : Int)).push (-(i : Int))
+  return out ++ (#[20, -20, 32, -32, 50, -50, 64, -64, 99, 100, 101, -100, 255, 256, -256, 999, 1000, 1001,
+    -1000] : Array Int).extract 0 (3 * (d - 16))
+def clSmallBool : Array Bool := #[false, true]
+def clSmallString (d : Nat) : Array String := #["", "a", "b", "ab", "ba", "aa", "abc"].extract 0 (d + 1)
+/-- Every array of up to `len` items drawn from `xs`, shortest first, at most `cap` of them. -/
+def clSmallArrays {α : Type} (xs : Array α) (len cap : Nat) : Array (Array α) := Id.run do
+  let mut out : Array (Array α) := #[#[]]
+  let mut lo := 0
+  for _ in [0:len] do
+    let hi := out.size
+    for i in [lo:hi] do
+      for x in xs do
+        if out.size ≥ cap then return out
+        out := out.push (out[i]!.push x)
+    lo := hi
+  return out
+def clSmallOption {α : Type} (xs : Array α) : Array (Option α) := #[none] ++ xs.map some
+def clSmallResult {α ε : Type} (xs : Array α) (es : Array ε) : Array (ClResult α ε) := xs.map .ok ++ es.map .err
+
+/-- One call: its `CXRUN` line reaches the real stdout before anything is computed (`run` is a thunk), so when the
+call stops the program or never returns, clc knows which call it was. `none` = the `requires` turned it away. -/
+@[noinline] def clCxCase (h : IO.FS.Handle) (line : String) (run : Unit → Option String) : IO Nat := do
+  h.putStrLn line
+  h.flush
+  match run () with
+  | none => return 0
+  | some s => return s.length + 1
+def clCxFn (name : String) (body : IO.FS.Handle → Nat → IO (Nat × Nat)) : IO Unit := do
+  let h ← IO.FS.Handle.mk "/dev/stdout" .append
+  let t0 ← IO.monoMsNow
+  let (n, sum) ← body h t0
+  h.putStrLn s!"CXDONE {name} {n} {(← IO.monoMsNow) - t0} {sum}"
+  h.flush
+"""
+
+
+def small_of(t, d, me=None, lowered=False):
+    """Lean for the Array of small values of claude-lang type t at depth d (a Lean Nat term), with no type
+    classes, like `fmt_of`. Depth bounds the size of an Int and the length and nesting of a list. Inside the
+    generator of struct or enum `me`, a value of `me` itself comes from one depth lower, so generation stops;
+    `lowered` says d already is lower (the path went through a list)."""
+    ty = ltype(t, "the counterexample search")
+    if t == "Int":
+        e = f"clSmallInt {d}"
+    elif t == "Bool":
+        e = "clSmallBool"
+    elif t == "String":
+        e = f"clSmallString {d}"
+    elif is_list(t):
+        e = (f"if {d} == 0 then #[#[]] else clSmallArrays {small_of(t[5:-1], f'({d} - 1)', me, True)} "
+             f"(min {d} 4) {CX_CAP}")
+    elif is_option(t):
+        e = f"clSmallOption {small_of(targs(t)[0], d, me, lowered)}"
+    elif is_result(t):
+        a, b = targs(t)
+        e = f"clSmallResult {small_of(a, d, me, lowered)} {small_of(b, d, me, lowered)}"
+    elif t in STRUCTS or t in ENUMS:
+        if t == me and not lowered:
+            e = f"if {d} == 0 then #[] else T_{t}.clSmall ({d} - 1)"
+        else:
+            e = f"T_{t}.clSmall {d}"
+    else:
+        raise Unsupported(f"small values of a `{t}`")
+    return f"(({e}) : Array {ty})"
+
+
 def lean_str(t):
     out = []
     for ch in t:
@@ -416,6 +495,87 @@ class LeanEmitter:
             out.append("def main : IO Unit := f_main ()" if io else "def main : IO Unit := pure (f_main ())")
         return "\n".join(out) + "\n"
 
+    def emit_search(self, targets):
+        """D32: the file that looks for a counterexample to the contracts of the functions named in `targets`.
+        The program's types and functions exactly as they run (recursive ones `partial`: nothing is proved
+        here), then for each target a loop that calls it on every small input its `requires` allow. The
+        function's own run-time checks do the judging: a broken `ensures`, a bad index or a callee's broken
+        `requires` stops Lean with exit 70 and the usual message, and the last `CXRUN` line says which call
+        it was. So one run finds at most one counterexample; clc runs again for the functions after it."""
+        out = [PRELUDE.replace("@FILE@", json.dumps(self.path))]
+        self.size_lemmas = {}
+        self.type_decls(out)
+        for comp in self.comps:
+            self.group(comp, None, self.is_recursive(comp), out)
+        out.append(SEARCH_PRELUDE)
+        self.small_decls(out)
+        for name in targets:
+            self.search_block(self.by_name[name], out)
+        out.append('#eval IO.println "CXEND"')
+        return "\n".join(out) + "\n"
+
+    def small_decls(self, out):
+        """`T_Name.clSmall d` for every struct and enum: each combination of its fields' small values, at most
+        CX_CAP. Each comes after the types it uses, as in `type_decls`; `partial` because a type that contains
+        itself calls its own generator (one depth lower, see `small_of`)."""
+        def combos(indent, fields, make, me):
+            """Nested loops over the fields' values, pushing `make` of each combination."""
+            for j, (_, t, _) in enumerate(fields):
+                out.append(f"{indent}let cl_s{j} := {small_of(t, 'd', me)}")
+            for j in range(len(fields)):
+                out.append(f"{indent}{'  ' * j}for c{j} in cl_s{j} do")
+            inner = indent + "  " * len(fields)
+            out.append(f"{inner}if out.size ≥ {CX_CAP} then return out")
+            out.append(f"{inner}out := out.push ({make}{''.join(f' c{j}' for j in range(len(fields)))})")
+
+        for st in getattr(self, "type_order", []):
+            out.append(f"partial def T_{st.name}.clSmall (d : Nat) : Array T_{st.name} := Id.run do")
+            out.append(f"  let mut out : Array T_{st.name} := #[]")
+            if st.kind == "struct":
+                combos("  ", st.fields, f"T_{st.name}.mk", st.name)
+            else:
+                for vname, fs, _ in st.variants:
+                    out.append("  do")  # its own scope, so each variant can reuse the names cl_s0, c0, ...
+                    combos("    ", fs, f"T_{st.name}.v_{vname}", st.name)
+            out.append("  return out")
+        out.append("")
+
+    def search_block(self, f, out):
+        """One function's search: depth by depth (so the first counterexample found is a small one), every
+        combination of its parameters' small values, until CX_CAP calls, CX_TRIED distinct inputs or CX_MS.
+        An input the `requires` turn away isn't a call."""
+        reqs = contracts(f, "requires")
+        args = " ".join(([lean_str(self.loc(f.name_tok))] if reqs else []) + [f"v_{n}" for n, _, _ in f.params])
+        call = f"({self.lname(f.name)} {args or '()'})"
+        ok = " && ".join(f"({self.expr(r.expr)})" for r in reqs) or "true"
+        out.append("")
+        out.append(f"#eval clCxFn {lean_str(f.name)} fun cl_h cl_t0 => do")
+        out.append("  let mut cl_n : Nat := 0")
+        out.append("  let mut cl_sum : Nat := 0")
+        out.append("  let mut cl_tried : Nat := 0")
+        out.append("  let mut cl_seen : Array UInt64 := #[]")
+        out.append(f"  for cl_d in [0:{CX_DEPTHS if f.params else 1}] do")
+        for j, (n, t, _) in enumerate(f.params):
+            out.append(f"    let cl_s{j} := {small_of(t, 'cl_d')}")
+        ind = "    "
+        for j, (n, _, _) in enumerate(f.params):
+            out.append(f"{ind}for v_{n} in cl_s{j} do")
+            ind += "  "
+        out.append(f"{ind}if cl_n ≥ {CX_CAP} || cl_tried ≥ {CX_TRIED} || (← IO.monoMsNow) - cl_t0 > {CX_MS} then "
+                   f"return (cl_n, cl_sum)")
+        # A depth repeats the inputs of the depths below it; `cl_seen` (sorted hashes of the call texts) skips them.
+        out.append(f"{ind}let cl_text := {self.call_text(f)}")
+        out.append(f"{ind}let cl_k := hash cl_text")
+        out.append(f"{ind}if (cl_seen.binSearch cl_k (· < ·)).isNone then")
+        out.append(f"{ind}  cl_seen := cl_seen.binInsert (· < ·) cl_k")
+        out.append(f"{ind}  cl_tried := cl_tried + 1")
+        out.append(f"{ind}  let cl_r ← clCxCase cl_h ({lean_str('CXRUN ' + f.name + ' ')} ++ cl_text) "
+                   f"(fun _ => if {ok} then some {fmt_of(f.ret, call)} else none)")
+        out.append(f"{ind}  if cl_r > 0 then")
+        out.append(f"{ind}    cl_n := cl_n + 1")
+        out.append(f"{ind}    cl_sum := cl_sum + cl_r")
+        out.append("  return (cl_n, cl_sum)")
+
     def type_decls(self, out):
         """Structs (D22) as Lean structures and enums (D24) as inductives, each after the types it uses. A type
         can contain itself (a struct only through a list), which Lean takes as a (nested) inductive. Then one
@@ -429,10 +589,12 @@ class LeanEmitter:
         names = [st.name for st in self.types]
         edges = {st.name: sorted(set().union(*[type_refs(t) for _, t, _ in fields_of(st)]) - {st.name})
                  for st in self.types}
+        self.type_order = []
         for comp in sccs(names, edges):
             if len(comp) > 1:
                 raise Unsupported(f"types that contain each other ({', '.join(comp)})")
             st = next(x for x in self.types if x.name == comp[0])
+            self.type_order.append(st)
             if st.kind == "struct":
                 out.append(f"structure T_{st.name} where")
                 for fname, t, _ in st.fields:

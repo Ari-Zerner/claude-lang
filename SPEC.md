@@ -195,6 +195,10 @@ end fn name
   breaks it stops the program at that `return`. A function that returns nothing has no `ensures`.
   The compiler also tries to **prove** each `ensures` from the `requires`, for every input; one it
   can't prove gets a warning (`unproved`, with the reason) and is still checked at run time.
+  It also calls a function with an unproved `ensures` on small inputs that the `requires` allow. A
+  call that breaks the `ensures` (`ensures-false`) or stops the program (`input-crashed`: a bad
+  index, a callee's broken `requires`, endless recursion) is a compile error that names the call.
+  So when a function needs something of its inputs, say it: `requires length(xs) > 0`.
 
   ```
   fn isqrt(n: Int) -> Int

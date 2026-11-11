@@ -4,8 +4,9 @@
 # `result` naming the value. The failures are in tests/err/contracts-run.cl.
 # total: down count_digits
 # An `ensures` marked `# unproved` must be one clc can't prove (D30), and every other must be proved: isqrt's
-# (a `while` loop), wrong_abs's (false for x < -5, which nothing here reaches), spin's (no `requires`, so it may
-# never stop) and double_abs's (it follows from wrong_abs's, D31). digits_plus is proved from count_digits's.
+# (a `while` loop), wrong_abs's (false for x < -5000, which nothing here reaches), steps's (clc can't show it
+# stops) and double_abs's (it follows from wrong_abs's, D31). digits_plus is proved from count_digits's.
+# None of them has a small counterexample (D32): those are in tests/err/contracts-search.cl.
 struct Range
   lo: Int
   hi: Int
@@ -65,11 +66,12 @@ fn clamp(x: Int, lo: Int, hi: Int) -> Int
   return x
 end fn clamp
 
-# false for x < -5, which no example or call reaches: checked at run time, and not proved
+# false for x < -5000, which no example or call reaches and the small-input search (D32) doesn't either:
+# checked at run time, and not proved
 fn wrong_abs(x: Int) -> Int
   ensures result >= 0  # unproved
   example wrong_abs(-3) == 3
-  if x < -5
+  if x < -5000
     return x
   end if
   if x < 0
@@ -78,14 +80,18 @@ fn wrong_abs(x: Int) -> Int
   return x
 end fn wrong_abs
 
-# never stops for a negative n, and nothing rules that out
-fn spin(n: Int) -> Int
-  ensures result == 0  # unproved
+# always stops, but by flipping the sign first, which none of D28's measures covers
+fn steps(n: Int) -> Int
+  ensures result >= 0  # unproved
+  example steps(-2) == 2
+  if n < 0
+    return steps(-n)
+  end if
   if n == 0
     return 0
   end if
-  return spin(n - 1)
-end fn spin
+  return 1 + steps(n - 1)
+end fn steps
 
 # proved from count_digits's `ensures`, whose `requires` this one's `requires` gives (D31)
 fn digits_plus(n: Int) -> Int
@@ -116,7 +122,7 @@ fn main() uses io
   print(width(Range(lo: -3, hi: 4)))
   print(clamp(x: -4, lo: 0, hi: 10))
   print(wrong_abs(-2))
-  print(spin(3))
+  print(steps(-3))
   print(digits_plus(123))
   print(double_abs(4))
   greet(2)

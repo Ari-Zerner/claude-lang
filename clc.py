@@ -18,6 +18,7 @@ import argparse
 import difflib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -3045,6 +3046,199 @@ def probe_lean(lean, psrc, tmp):
     return found
 
 
+CX_ROUNDS = 6    # search runs per build (D32): a finding ends its run, so up to 5 findings and a clean pass
+CX_HANG_S = 2.0  # CPU seconds one call may take before the search gives up on it
+
+
+def run_search(lean, src, tmp):
+    """Elaborate one counterexample-search file (D32), watching its output: (stdout lines, stderr, exit code,
+    "hang" | "slow" | None). "hang": the call named by the last `CXRUN` line used CX_HANG_S of CPU without
+    returning, so it was killed. CPU time, not wall time, so a box that's swapping doesn't look like a loop.
+    The 16 MB stack makes endless non-tail recursion stop within a second ("deep recursion was detected");
+    with Lean's default it grows by ~100 MB a second instead."""
+    import threading
+    import time
+    sfile = os.path.join(tmp, "Search.lean")
+    with open(sfile, "w") as fh:
+        fh.write(src)
+    p = subprocess.Popen([lean, "-s", "16384", sfile], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                         cwd=tmp)
+    lines, errs = [], []
+
+    def pump(stream, into):
+        for ln in stream:
+            into.append(ln.rstrip("\n"))
+    readers = [threading.Thread(target=pump, args=a, daemon=True) for a in ((p.stdout, lines), (p.stderr, errs))]
+    for t in readers:
+        t.start()
+
+    def cpu():
+        try:
+            with open(f"/proc/{p.pid}/stat") as fh:
+                parts = fh.read().rsplit(")", 1)[1].split()
+            return (int(parts[11]) + int(parts[12])) / os.sysconf("SC_CLK_TCK")
+        except (OSError, IndexError, ValueError):
+            return None
+    start = mark_wall = time.monotonic()
+    seen, mark_cpu, how = 0, cpu(), None
+    while True:
+        try:
+            p.wait(timeout=0.1)
+            break
+        except subprocess.TimeoutExpired:
+            pass
+        now, n = time.monotonic(), len(lines)
+        if n != seen:
+            seen, mark_cpu, mark_wall = n, cpu(), now
+            continue
+        c = cpu()
+        used = c - mark_cpu if c is not None and mark_cpu is not None else (now - mark_wall) / 3
+        if seen and lines[seen - 1].startswith("CXRUN ") and used >= CX_HANG_S:
+            how = "hang"
+        elif now - start > 120:
+            how = "slow"
+        if how:
+            p.kill()
+            p.wait()
+            break
+    for t in readers:
+        t.join(timeout=5)
+    return list(lines), "\n".join(errs), p.returncode, how
+
+
+def cx_search(lean, em, targets, tmp):
+    """D32: look for a counterexample to the contracts of the functions in `targets` by calling each on small
+    inputs. Returns (findings, counts): findings[fn] = (kind, call, message) with kind "stopped" (the call
+    stopped the program: message is the runtime error), "hang", "deep" (endless recursion) or "crashed";
+    counts[fn] = how many calls ran, for a function that got through the search with no finding. A function
+    in neither wasn't searched (it calls one with a finding, or the rounds ran out). None when the search file
+    itself didn't check.
+    The answer is cached by the first search file's text, the Lean install and clc's own source
+    (`~/.cache/clc/search/`)."""
+    import hashlib
+    first = em.emit_search(targets)
+    h = hashlib.sha256((os.path.realpath(lean) + "\0" + first).encode())
+    import cl_lean
+    for src in (__file__, cl_lean.__file__):
+        with open(src, "rb") as fh:  # the answer depends on how clc runs and reads the search, so on clc itself
+            h.update(fh.read())
+    key = h.hexdigest()
+    cache = os.path.join(os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache"), "clc", "search")
+    path = os.path.join(cache, key + ".json")
+    try:
+        with open(path) as fh:
+            got = json.load(fh)
+        return {k: tuple(v) for k, v in got["findings"].items()}, got["counts"]
+    except (OSError, ValueError, KeyError):
+        pass
+    findings, counts, todo, sure = {}, {}, list(targets), True
+    for _ in range(CX_ROUNDS):
+        if not todo:
+            break
+        lines, err, code, how = run_search(lean, first if todo == targets else em.emit_search(todo), tmp)
+        sfile = os.path.join(tmp, "Search.lean")
+        last = None
+        for ln in lines:
+            if ln.startswith("CXRUN "):
+                last = ln.split(" ", 2)[1:]
+            elif ln.startswith("CXDONE "):
+                counts[ln.split()[1]] = int(ln.split()[2])
+                last = None
+        if any(ln.startswith(sfile + ":") and ": error" in ln for ln in lines) or (
+                last is None and how is None and (code != 0 or "CXEND" not in lines)):
+            kept = os.path.join(tempfile.mkdtemp(prefix="clc-"), "Search.lean")
+            shutil.copy(sfile, kept)
+            shown = "\n".join(ln for ln in lines if not ln.startswith("CX"))
+            print(f"clc: internal error: the generated counterexample search didn't check (this is a compiler "
+                  f"bug). Lean kept at {kept}\n{shown[:4000]}{err[:2000]}", file=sys.stderr)
+            return None
+        if how == "slow" or last is None:
+            sure = sure and how != "slow"
+            break
+        fn, call = last
+        why = err.strip().splitlines()[-1] if err.strip() else ""
+        if how == "hang":
+            findings[fn] = ("hang", call, "")
+        elif code == 70:
+            findings[fn] = ("stopped", call, why)
+        elif "deep recursion" in err:
+            findings[fn] = ("deep", call, "")
+        else:
+            findings[fn] = ("crashed", call, why[:300])
+        # Go on with the functions after it, but not its callers: they'd stop at the same place.
+        callers, grew = {fn}, True
+        while grew:
+            grew = False
+            for name, callees in em.edges.items():
+                if name not in callers and callers & set(callees):
+                    callers.add(name)
+                    grew = True
+        todo = [t for t in (todo[todo.index(fn) + 1:] if fn in todo else []) if t not in callers]
+    if sure:
+        try:
+            os.makedirs(cache, exist_ok=True)
+            with open(path + ".tmp", "w") as fh:
+                json.dump({"findings": findings, "counts": counts}, fh)
+            os.replace(path + ".tmp", path)
+        except OSError:
+            pass  # no cache this time
+    return findings, counts
+
+
+def search_diags(em, specs, findings, counts, d):
+    """Report what `cx_search` found (D32), and return what to add to each `unproved` warning: {ensures node:
+    text}, with None for an `ensures` shown false (the error replaces its warning)."""
+    notes = {}
+    for f, c, why in specs:
+        if why and f.name in counts:
+            n = counts[f.name]
+            notes[c] = ("clc called it and it held" if not f.params else
+                        f"clc called it on {n} small input{'' if n == 1 else 's'} and none broke it" if n else
+                        "clc found no small input that its `requires` allow, so it tried none")
+    rule_out = "add a `requires` that rules this call out"
+    broke = re.compile(r".*?:(\d+):\d+: runtime error: (.*) returned (.*), which breaks `ensures .*` \(line (\d+)\)$")
+    false_lines = set()  # `ensures` lines shown false, so a caller stopped by the same check isn't reported too
+    for name, (kind, call, msg) in findings.items():
+        m = broke.match(msg) if kind == "stopped" else None
+        if m and m.group(2) == call:
+            false_lines.add(int(m.group(4)))
+    for name, (kind, call, msg) in findings.items():
+        f = em.by_name[name]
+        at = f.name_tok
+        found = f"clc found this by calling fn {name} on small inputs"
+        m = broke.match(msg) if kind == "stopped" else None
+        own = [c for c in contracts_of(f, "ensures") if m and m.group(2) == call and c.tok.line == int(m.group(4))]
+        if own:
+            c = own[0]
+            notes[c] = None
+            d.error("ensures-false", f"`ensures {c.text}` is false: {call} returns {m.group(3)}",
+                    c.tok.line, c.tok.col, len("ensures"),
+                    fix=f"{found}. Change the function or the `ensures`, or {rule_out}")
+        elif m and int(m.group(4)) in false_lines:
+            pass  # the callee's own `ensures-false` says it
+        elif kind == "stopped":
+            m = re.match(r".*?:(\d+):\d+: runtime error: (.*)$", msg)
+            what = f" at line {m.group(1)}: {m.group(2)}" if m else f": {msg}"
+            d.error("input-crashed", f"{call} stops the program{what}", at.line, at.col, len(name),
+                    fix=f"{found}, and its `requires` allow this one. Handle it, or {rule_out}")
+        elif kind == "deep":
+            d.error("input-crashed", f"{call} doesn't finish: its recursion gets too deep (it probably never stops)",
+                    at.line, at.col, len(name),
+                    fix=f"{found}, and its `requires` allow this one. Make it stop, or {rule_out}")
+        elif kind == "crashed":
+            d.error("input-crashed", f"{call} crashes{': ' + msg if msg else ''}", at.line, at.col, len(name),
+                    fix=f"{found}. Handle it, or {rule_out}")
+        else:
+            d.warning("input-timeout", f"{call} was still running after {CX_HANG_S:g} s of computing, when clc "
+                      f"called fn {name} on small inputs to check its `ensures`", at.line, at.col, len(name),
+                      fix=f"if it never stops, fix that or {rule_out}")
+    return notes
+
+
+def contracts_of(f, kind):
+    return [s for s in f.body if s.kind == kind]
+
+
 def lean_main(args, d, fns, structs):
     """The Lean backend (D26): emit Lean, elaborate it (running the examples), then build with leanc."""
     import cl_lean
@@ -3093,10 +3287,22 @@ def lean_main(args, d, fns, structs):
             return 2
         example_diags(out, err, timed_out, em, d)
         specs = em.read_specs(out)
+        notes = {}
+        targets = []
         for f, c, why in specs:
-            if why:
-                d.warning("unproved", f"`ensures {c.text}` isn't proved: {why}. It's still checked at run time",
-                          c.tok.line, c.tok.col, len("ensures"))
+            if why and not f.uses_io and f.name not in targets:
+                targets.append(f.name)
+        if targets and not d.has_errors():
+            # D32: an `ensures` that isn't proved might be false. Call the function on small inputs and see.
+            found = cx_search(lean, em, targets, tmp)
+            if found is None:
+                return 2
+            notes = search_diags(em, specs, *found, d)
+        for f, c, why in specs:
+            if why and notes.get(c, "") is not None:
+                more = f"; {notes[c]}" if c in notes else ""
+                d.warning("unproved", f"`ensures {c.text}` isn't proved: {why}{more}. It's still checked at run "
+                          f"time", c.tok.line, c.tok.col, len("ensures"))
         if not d.has_errors() and args.command in ("build", "run"):
             r = None
             if args.command == "run":

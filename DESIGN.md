@@ -418,9 +418,8 @@ Claude differs from a human programmer in ways that matter for language design:
     the `ensures` line, with the reason: a `while`/`for` loop (not provable yet), a function D28 left
     `partial`, io, or "the automation didn't find a proof" (which includes a false `ensures` that no example
     reaches, like `wrong_abs` returning `x` for `x < -5`). `clc test` ends with "N of M `ensures` proved".
-  - *Not yet:* call-site proofs of `requires` (D31), loops (`invariant`), counterexamples for a false
-    `ensures` (the automation only says it failed), a heartbeat limit for a slow `grind` (a timeout would be
-    an error, not a `sorry`).
+  - *Not yet:* call-site proofs of `requires` (D31), loops (`invariant`), a heartbeat limit for a slow
+    `grind` (a timeout would be an error, not a `sorry`). Counterexamples for a false `ensures` came with D32.
 
 - **D31. Proofs are modular: a function's proved `ensures` is a fact at every call; an unproved one is an
   assumption that's named.** (2026-11-10, night 6; built.)
@@ -439,6 +438,37 @@ Claude differs from a human programmer in ways that matter for language design:
     `requires` is still checked at run time, and a caller's proof can only use the callee's `ensures` where
     it can show the `requires` itself.
 
+- **D32. An unproved `ensures` is tested on small inputs at build time; a counterexample is an error.**
+  (2026-11-11, night 7; built.) "Unproved" used to cover two different things, a true `ensures` the
+  automation can't reach (every loop, today) and a false one, and only the second is a bug.
+  - *What runs:* for each pure function with an unproved `ensures`, clc calls it on every combination of small
+    values of its parameters that the `requires` allow, smallest first: Ints 0, 1, -1, ... to ±16, then a few
+    usual edges (99, 100, 101, 255, 256, ±1000, ...); lists up to four items long; structs and enums from their
+    fields' values; `Option`/`Result` around those. Up to 3000 distinct calls or 1.5 s per function.
+  - *The function's own run-time checks are the judge* (D29), so the search file is the program as it runs,
+    plus the loops. Three findings:
+    - `ensures-false` (error): `` `ensures result >= 0` is false: wrong_abs(x: -6) returns -6 ``.
+    - `input-crashed` (error): the call stops the program, e.g. `largest(xs: [])` on `xs[0]`, or
+      `digits_twice(n: -1)` breaking a callee's `requires`, or recursion that never ends. The contract claims
+      a result for every input the `requires` allow, so the fix is usually a missing `requires`. This is also
+      a first, tested stand-in for proving each call's `requires` (D31's "not yet").
+    - `input-timeout` (warning): one call used 2 s of CPU. Slow isn't wrong, so the build goes on.
+  - *Errors, not warnings,* for the same reason a false `example` is (D8): it's a concrete input on which the
+    program contradicts what its author wrote. The message gives the call and the value, which is what a fix
+    needs (principle 4). With no finding, the `unproved` warning says how many calls were tried.
+  - *A separate Lean run, only when something is unproved,* cached by its text (`~/.cache/clc/search/`). A
+    stopped program ends the run, so a finding costs one more run for the functions after it (callers of the
+    function with the finding are skipped: they'd stop at the same place); at most five findings per build.
+    Measured here: ~1.2 s CPU per run, 3000 calls in 0.2-0.3 s.
+  - *Two hazards met on the way:* endless non-tail recursion grows Lean's interpreter stack by ~100 MB a
+    second, so the search runs with a 16 MB stack (`lean -s`), where it's "deep recursion" within a second;
+    and an endless loop is told from a swapping machine by CPU time, not wall time.
+  - *Limits:* it only finds small counterexamples. A bug past the values above (a tax bracket at 40000) is
+    missed: the function's own literals, ±1, should seed the Int values next. Lists longer than four items
+    aren't tried. Io functions and functions with no unproved `ensures` aren't searched (a function with no
+    contract at all could be searched for crashes too; not decided). The same hazards exist for `example`s
+    in the main run, which still uses Lean's default stack.
+
 ## Open questions
 
 - Memory management: value semantics with copy-on-write (D19); nothing is freed yet.
@@ -452,9 +482,9 @@ Claude differs from a human programmer in ways that matter for language design:
   verification tedious for people (pre/postconditions, loop invariants) are cheap for Claude
   (point 3), and value semantics, no global state and effects in signatures remove the aliasing
   and heap reasoning that make verifiers hard. It targets point 5 directly. Plan:
-  (a) `requires` / `ensures` lines beside `example`, checked at runtime; (b) at build time, run
+  (a) `requires` / `ensures` lines beside `example`, checked at runtime (D29); (b) at build time, run
   each function on many small inputs that satisfy `requires` and report the first that breaks
-  `ensures`, which is the concrete counterexample a point-4 diagnostic needs; (c) **proofs, the
+  `ensures`, which is the concrete counterexample a point-4 diagnostic needs (D32); (c) **proofs, the
   goal**, with `invariant` lines on loops; they would also prove D16's traps can't fire. (b) is a
   stepping stone and the counterexample finder, not a substitute for (c).
   Backend for (c): **decided in D26, Lean 4, with claude-lang compiled to Lean.** The notes that
