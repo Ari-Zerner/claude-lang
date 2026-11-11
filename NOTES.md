@@ -575,6 +575,20 @@ design and its decisions (D1...).
   [clTrap]` clears the trap messages first. Dead ends on the way: `mleave; simp_all; grind` works for the
   `for` but takes 6-10 s; passing the cursor lemmas as `grind [...]` arguments instead of patterns.
 
+- 2026-11-11 (night 7, step 5): **D33 (a), the front end for `invariant` and `decreases` lines.** `clc.py`:
+  two keywords; the statement parser takes them like `requires`; `Checker.loop_headers` (called for `while`
+  and `for` before the body) checks the lines at the top of a loop's body and sets `loop.invariants` and
+  `loop.decreases` (each node has `.text`, like a contract); `block(..., loop=)` places them; `all_nodes`
+  walks an AST. Errors: `contract-placement` (not at the top of a loop; also, new, a `requires`/`ensures`
+  nested inside a block, which used to be silently ignored), `decreases-for`, `duplicate-decreases`,
+  `invariant-item` (`x` of `for x in xs`), `not-bool`, `type-mismatch`, `contract-effect`; `assert` now has
+  a hint. C refuses such programs (exit 3); `cl_lean.py` skips the lines, so nothing that runs changes yet.
+  Tests: `tests/ok/invariants.cl` (isqrt, triangle, gcd with two `invariant` lines, a list `for`, nested
+  loops in an io function), `tests/err/invariants.cl` (12 errors, one per mistake). No program in the
+  trial results uses either word as a name. **SPEC.md says nothing about them yet, on purpose:** until the
+  proofs are in, the lines do nothing, and SPEC is what a model is told is true.
+  **Lean 39/39, C 32/32 + 3 skipped.**
+
 ## Next step
 1. **Formal verification** (Ari, 2026-11-07: "we definitely want proofs, not just fuzzing"; see
    DESIGN.md open questions): contracts (`requires`/`ensures`), build-time counterexample search,
@@ -609,11 +623,8 @@ design and its decisions (D1...).
      no contract for crashes (run it over the trial corpus first to see how much it flags).
      **D33 is decided (night 7 step 4): `invariant`/`decreases` lines, proved by `mvcgen` on the loop as
      emitted.** Build order, one step each:
-     (a) **front end** (next): keywords `invariant` and `decreases`; parse them as header lines of a loop body;
-     check (Bool / Int, no io, the loop's variables in scope, `decreases` only in a `while` and only once,
-     no `x` of a `for x in xs` in an invariant yet), with targeted errors; C backend refuses them like
-     contracts; the Lean backend ignores them for now; SPEC paragraph; tests ok + err.
-     (b) **proofs:** in `spec_theorems`, a function with loops gets the `mvcgen` script from
+     (a) **front end: done (night 7 step 5)**, except the SPEC paragraph, which goes in with (b).
+     (b) **proofs (next):** in `spec_theorems`, a function with loops gets the `mvcgen` script from
      `trials/lean/loops_mvcgen.lean` (state tuple = the loop's assigned `var`s in declaration order;
      `import Std.Tactic.Do` + the three lemmas only when needed); `unproved` reasons name the loop and what
      it lacks. isqrt in `tests/ok/contracts.cl` should then prove.

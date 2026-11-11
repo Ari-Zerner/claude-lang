@@ -97,8 +97,10 @@ class Diags:
 # ------------------------------------------------------------------ lexer
 
 KEYWORDS = {"fn", "end", "if", "else", "while", "for", "break", "continue", "return", "let", "var", "example",
-            "requires", "ensures", "uses", "true", "false", "and", "or", "not", "struct", "enum", "match", "case"}
+            "requires", "ensures", "uses", "true", "false", "and", "or", "not", "struct", "enum", "match", "case",
+            "invariant", "decreases"}
 HEADER_KINDS = ("example", "requires", "ensures")  # lines between `fn` and the body (D8, D29)
+LOOP_HEADER_KINDS = ("invariant", "decreases")  # lines between `while`/`for` and the loop's body (D33)
 BLOCK_KINDS = ("fn", "if", "while", "for", "struct", "enum", "match")
 NAMED_BLOCKS = ("fn", "struct", "enum")
 RANGE_FIX = "`a until b` stops before b, `a through b` includes it: `for i in 0 until n`"
@@ -443,7 +445,9 @@ CLOSER_WORDS = {"endif": "if", "fi": "if", "endwhile": "while", "done": "while",
                 "endstruct": "struct", "endenum": "enum", "endmatch": "match"}
 STMT_HINTS = {"elif": "write `else if`", "elsif": "write `else if`", "elseif": "write `else if`",
               "const": "write `let` (or `var` for a variable that changes)",
-              "loop": "write `while true`"}
+              "loop": "write `while true`",
+              "assert": "say what must hold with `requires` or `ensures` on the function, or `invariant` at the top "
+                        "of a loop"}
 LINE_END_HINTS = {"is": "there's no `is`: compare with `==` (`x == None`), or unpack an Option with `match`",
                   "then": "no `then`: the block starts on the next line",
                   "do": "no `do`: the block starts on the next line",
@@ -944,7 +948,7 @@ class Parser:
                 self.next()
                 self.end_line()
                 return Node(w, t)
-            if w in ("example", "requires", "ensures"):  # D8, D29
+            if w in ("example", "requires", "ensures", "invariant", "decreases"):  # D8, D29, D33
                 self.next()
                 e = self.expr()
                 self.end_line()
@@ -1378,6 +1382,19 @@ class Var:
         self.over = over  # for a loop variable walking a list variable: that variable's name
 
 
+def all_nodes(node):
+    """Every AST node inside node (statements and expressions), node itself included."""
+    if isinstance(node, (list, tuple)):
+        for x in node:
+            yield from all_nodes(x)
+    elif isinstance(node, Node):
+        yield node
+        for k, v in vars(node).items():
+            if k not in ("tok", "start", "name_tok", "end_tok", "var_tok", "invariants", "decreases") and isinstance(
+                    v, (list, tuple, Node)):
+                yield from all_nodes(v)
+
+
 def returns(stmts):
     """Does every path through these statements end in `return`?"""
     for s in stmts:
@@ -1570,11 +1587,27 @@ class Checker:
     def visible_names(self):
         return [n for sc in self.scopes for n in sc]
 
-    def block(self, stmts, new_scope=True):
+    def block(self, stmts, new_scope=True, loop=None):
+        """Check a block. `loop` is the `while` or `for` whose body this is, for its `invariant` and `decreases`
+        lines (D33); `new_scope` is false only for a function's own body, whose header lines `check_fn` places."""
         if new_scope:
             self.scopes.append({})
-        dead = warned = False
+        dead = warned = seen_body = False
         for s in stmts:
+            if s.kind in LOOP_HEADER_KINDS:
+                if loop is None or seen_body:
+                    self.err("contract-placement", f"`{s.kind}` lines go at the top of a loop's body, right after "
+                             "its `while` or `for` line", s.tok,
+                             None if new_scope or seen_body else
+                             "on a function, the words are `requires` and `ensures`")
+                    s.misplaced = True
+            elif s.kind in HEADER_KINDS and new_scope:
+                self.err(f"{'example' if s.kind == 'example' else 'contract'}-placement",
+                         f"`{s.kind}` lines go right after the `fn` line, before the body", s.tok,
+                         "inside a loop, the word is `invariant`" if self.loops and s.kind != "example" else None)
+                s.misplaced = True
+            else:
+                seen_body = True
             if dead and not warned:
                 self.d.warning("unreachable", "this line can never run: it comes after a `return`, `break` or "
                                "`continue`",
@@ -1594,9 +1627,54 @@ class Checker:
         elif t not in (None, "Bool"):
             self.err_at("not-bool", f"a condition must be Bool, but this is {t}", c)
 
+    def loop_headers(self, loop):
+        """The `invariant` and `decreases` lines at the top of a loop's body (D33): Bool and Int expressions over
+        what's in scope where the loop starts (in a range `for`, its variable too: the next index), no io.
+        Sets `loop.invariants` and `loop.decreases`."""
+        heads = []
+        for h in loop.body:
+            if h.kind not in LOOP_HEADER_KINDS:
+                break
+            heads.append(h)
+        for h in heads:
+            h.text = render(h.expr)
+            if loop.kind == "for" and loop.src is not None and loop.var:
+                # `for x in xs`: there's no item once the loop is over, and the invariant has to hold then too
+                for n in all_nodes(h.expr):
+                    if n.kind == "name" and n.name == loop.var:
+                        self.err_at("invariant-item", f"`{loop.var}` is the item of one pass, but an `{h.kind}` "
+                                    "must also hold when the loop is over, and then there is no item", n,
+                                    f"loop over an index and state it about that: `for i in 0 until "
+                                    f"length({render(loop.src)})`")
+                        break
+            self.in_contract = h.kind
+            t = self.expr(h.expr)
+            self.in_contract = None
+            if h.kind == "invariant" and t not in (None, "Bool"):
+                self.err_at("not-bool", "an `invariant` line must be a Bool expression, e.g. `invariant i <= n`",
+                            h.expr)
+            elif h.kind == "decreases" and t not in (None, "Int"):
+                self.err_at("type-mismatch", f"`decreases` needs an Int that gets smaller on every pass, but "
+                            f"`{h.text}` is {t}", h.expr, "e.g. `decreases n - i`")
+        decs = [h for h in heads if h.kind == "decreases"]
+        if loop.kind == "for":
+            for h in decs:
+                self.err("decreases-for", "a `for` loop always ends, so it has no `decreases`; that line is for "
+                         "`while`", h.tok, "remove this line")
+            decs = []
+        for h in decs[1:]:
+            self.err("duplicate-decreases", f"this loop already has a `decreases` on line {decs[0].tok.line}; "
+                     "a loop has one", h.tok, "combine them into one Int that gets smaller on every pass")
+        loop.invariants = [h for h in heads if h.kind == "invariant"]
+        loop.decreases = decs[0] if decs else None
+
     def stmt(self, s):
         k = s.kind
-        if k in ("requires", "ensures"):
+        if k in LOOP_HEADER_KINDS:
+            pass  # checked by `loop_headers` when it's where it belongs; `block` has reported it when it isn't
+        elif k in ("requires", "ensures") and getattr(s, "misplaced", False):
+            pass
+        elif k in ("requires", "ensures"):
             # D29: parameters are in scope, and `result` (the return value) in `ensures`; no io.
             self.scopes.append({})
             if k == "ensures" and self.cur.ret not in ("Unit", None):
@@ -1673,7 +1751,8 @@ class Checker:
         elif k == "while":
             self.cond(s.cond)
             self.loops += 1
-            self.block(s.body)
+            self.loop_headers(s)
+            self.block(s.body, loop=s)
             self.loops -= 1
         elif k == "for":
             self.for_stmt(s)
@@ -1759,7 +1838,8 @@ class Checker:
                 over = s.src.name if s.src is not None and s.src.kind == "name" and vt else None
                 self.scopes[-1][s.var] = Var(vt, False, s.tok.line, loop=True, over=over)
         self.loops += 1
-        self.block(s.body)
+        self.loop_headers(s)
+        self.block(s.body, loop=s)
         self.loops -= 1
         self.scopes.pop()
 
@@ -3369,6 +3449,9 @@ def main(argv=None):
         return lean_main(args, d, fns, structs)
     if any(s.kind in ("requires", "ensures") for f in fns for s in f.body):
         print("clc: the C backend doesn't support `requires`/`ensures` (D29); drop `--backend c`", file=sys.stderr)
+        return 3
+    if any(n.kind in LOOP_HEADER_KINDS for f in fns for n in all_nodes(f.body)):
+        print("clc: the C backend doesn't support `invariant`/`decreases` (D33); drop `--backend c`", file=sys.stderr)
         return 3
     em = Emitter(fns, structs, args.file)
     csrc = em.emit()

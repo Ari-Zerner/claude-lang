@@ -393,6 +393,7 @@ def side_names(e):
 
 
 HEADER_KINDS = ("example", "requires", "ensures")  # lines before a function's body (D8, D29)
+LOOP_HEADER_KINDS = ("invariant", "decreases")  # lines before a loop's body (D33): for proofs, nothing to run yet
 
 
 def contracts(f, kind):
@@ -961,7 +962,7 @@ class LeanEmitter:
         start = len(out)
         for s in stmts:
             k = s.kind
-            if k in HEADER_KINDS:
+            if k in HEADER_KINDS or k in LOOP_HEADER_KINDS:
                 continue
             if k == "let":
                 if s.name == "_":
