@@ -4,9 +4,10 @@
 # `result` naming the value. The failures are in tests/err/contracts-run.cl.
 # total: down count_digits
 # An `ensures` marked `# unproved` must be one clc can't prove (D30), and every other must be proved: isqrt's
-# (a `while` loop), wrong_abs's (false for x < -5000, which nothing here reaches), steps's (clc can't show it
+# (a `while` loop), wrong_abs's (false for x < -5000000, which nothing here reaches), steps's (clc can't show it
 # stops) and double_abs's (it follows from wrong_abs's, D31). digits_plus is proved from count_digits's.
-# None of them has a small counterexample (D32): those are in tests/err/contracts-search.cl.
+# None of them has a counterexample clc's search finds (D32): those are in tests/err/contracts-search.cl and
+# contracts-seeds.cl.
 struct Range
   lo: Int
   hi: Int
@@ -66,12 +67,12 @@ fn clamp(x: Int, lo: Int, hi: Int) -> Int
   return x
 end fn clamp
 
-# false for x < -5000, which no example or call reaches and the small-input search (D32) doesn't either:
-# checked at run time, and not proved
+# false for x < -5000000, which no example or call reaches, and the search (D32) doesn't either: it tries
+# small inputs and the function's own literals, but not a literal this large. Checked at run time, not proved
 fn wrong_abs(x: Int) -> Int
   ensures result >= 0  # unproved
   example wrong_abs(-3) == 3
-  if x < -5000
+  if x < -5000000
     return x
   end if
   if x < 0

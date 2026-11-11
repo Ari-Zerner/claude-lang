@@ -126,15 +126,25 @@ CX_MS = 1500     # and no longer than this per function
 SEARCH_PRELUDE = r"""
 -- Counterexample search (D32): small values of each type, smallest first, and the loop that tries them.
 set_option linter.unusedVariables false
-/-- 0, 1, -1, ... up to ±d through depth 16; each depth after that adds three of the usual edges. -/
-def clSmallInt (d : Nat) : Array Int := Id.run do
+/-- `xs`, then the first `n` of `seeds` that aren't in it already. The seeds are the literals of the function
+being searched (an Int also ±1), so a branch at `income < 40000` or `cmd == "north"` is within reach. -/
+def clSeeded {α : Type} [BEq α] (xs seeds : Array α) (n : Nat) : Array α := Id.run do
+  let mut out := xs
+  for s in seeds.extract 0 n do
+    if !out.contains s then out := out.push s
+  return out
+/-- 0, 1, -1, ... up to ±d through depth 16; each depth after that adds three of the usual edges. Each depth
+also adds one literal's three seeds. -/
+def clSmallInt (seeds : Array Int) (d : Nat) : Array Int := Id.run do
   let mut out : Array Int := #[0]
   for i in [1:(min d 16)+1] do
     out := (out.push (i : Int)).push (-(i : Int))
-  return out ++ (#[20, -20, 32, -32, 50, -50, 64, -64, 99, 100, 101, -100, 255, 256, -256, 999, 1000, 1001,
+  out := out ++ (#[20, -20, 32, -32, 50, -50, 64, -64, 99, 100, 101, -100, 255, 256, -256, 999, 1000, 1001,
     -1000] : Array Int).extract 0 (3 * (d - 16))
+  return clSeeded out seeds (3 * d)
 def clSmallBool : Array Bool := #[false, true]
-def clSmallString (d : Nat) : Array String := #["", "a", "b", "ab", "ba", "aa", "abc"].extract 0 (d + 1)
+def clSmallString (seeds : Array String) (d : Nat) : Array String :=
+  clSeeded (#["", "a", "b", "ab", "ba", "aa", "abc"].extract 0 (d + 1)) seeds d
 /-- Every array of up to `len` items drawn from `xs`, shortest first, at most `cap` of them. -/
 def clSmallArrays {α : Type} (xs : Array α) (len cap : Nat) : Array (Array α) := Id.run do
   let mut out : Array (Array α) := #[#[]]
@@ -167,18 +177,53 @@ def clCxFn (name : String) (body : IO.FS.Handle → Nat → IO (Nat × Nat)) : I
 """
 
 
+SEED_MAX = 100000    # a larger literal isn't tried as an input: a loop to 1000000007 would only time out
+SEED_LITERALS = 12   # literals per function that become inputs
+
+
+def literals(node):
+    """(Int literals, String literals) inside node, in order, except that the Ints compared with something
+    (`income < 40000`) come first: those are where the branches are. `-5` counts as -5."""
+    compared, other, strs = [], [], []
+
+    def walk(x, in_cmp=False, neg=False):
+        if isinstance(x, (list, tuple)):
+            for y in x:
+                walk(y)
+            return
+        if not hasattr(x, "kind") or not hasattr(x, "__dict__"):
+            return
+        if x.kind == "int":
+            (compared if in_cmp else other).append(-x.value if neg else x.value)
+        elif x.kind == "neg":
+            walk(x.expr, in_cmp, not neg)
+        elif x.kind == "str" and all(kind == "text" for kind, _ in x.parts):
+            strs.append("".join(p for _, p in x.parts))
+        elif x.kind == "bin" and x.op in ("==", "!=", "<", "<=", ">", ">="):
+            walk(x.left, True)
+            walk(x.right, True)
+        else:
+            for k, v in vars(x).items():
+                if k not in ("tok", "name_tok", "end_tok", "var_tok", "ty", "var_ty") and (
+                        isinstance(v, (list, tuple)) or hasattr(v, "kind")):
+                    walk(v)
+    walk(node)
+    return compared + other, strs
+
+
 def small_of(t, d, me=None, lowered=False):
     """Lean for the Array of small values of claude-lang type t at depth d (a Lean Nat term), with no type
     classes, like `fmt_of`. Depth bounds the size of an Int and the length and nesting of a list. Inside the
     generator of struct or enum `me`, a value of `me` itself comes from one depth lower, so generation stops;
-    `lowered` says d already is lower (the path went through a list)."""
+    `lowered` says d already is lower (the path went through a list). `cl_si` and `cl_ss` are in scope
+    wherever this goes: the Int and String seeds of the function being searched (`seeds`)."""
     ty = ltype(t, "the counterexample search")
     if t == "Int":
-        e = f"clSmallInt {d}"
+        e = f"clSmallInt cl_si {d}"
     elif t == "Bool":
         e = "clSmallBool"
     elif t == "String":
-        e = f"clSmallString {d}"
+        e = f"clSmallString cl_ss {d}"
     elif is_list(t):
         e = (f"if {d} == 0 then #[#[]] else clSmallArrays {small_of(t[5:-1], f'({d} - 1)', me, True)} "
              f"(min {d} 4) {CX_CAP}")
@@ -189,9 +234,9 @@ def small_of(t, d, me=None, lowered=False):
         e = f"clSmallResult {small_of(a, d, me, lowered)} {small_of(b, d, me, lowered)}"
     elif t in STRUCTS or t in ENUMS:
         if t == me and not lowered:
-            e = f"if {d} == 0 then #[] else T_{t}.clSmall ({d} - 1)"
+            e = f"if {d} == 0 then #[] else T_{t}.clSmall cl_si cl_ss ({d} - 1)"
         else:
-            e = f"T_{t}.clSmall {d}"
+            e = f"T_{t}.clSmall cl_si cl_ss {d}"
     else:
         raise Unsupported(f"small values of a `{t}`")
     return f"(({e}) : Array {ty})"
@@ -529,7 +574,8 @@ class LeanEmitter:
             out.append(f"{inner}out := out.push ({make}{''.join(f' c{j}' for j in range(len(fields)))})")
 
         for st in getattr(self, "type_order", []):
-            out.append(f"partial def T_{st.name}.clSmall (d : Nat) : Array T_{st.name} := Id.run do")
+            out.append(f"partial def T_{st.name}.clSmall (cl_si : Array Int) (cl_ss : Array String) (d : Nat) : "
+                       f"Array T_{st.name} := Id.run do")
             out.append(f"  let mut out : Array T_{st.name} := #[]")
             if st.kind == "struct":
                 combos("  ", st.fields, f"T_{st.name}.mk", st.name)
@@ -539,6 +585,24 @@ class LeanEmitter:
                     combos("    ", fs, f"T_{st.name}.v_{vname}", st.name)
             out.append("  return out")
         out.append("")
+
+    def seeds(self, f):
+        """The literals worth trying as inputs of fn f (D32): its own, then those of every function it can
+        reach. Ints as `c, c - 1, c + 1` (both sides of a branch at c), at most SEED_LITERALS of them; Strings
+        as they are."""
+        names, i = [f.name], 0
+        while i < len(names):
+            names += [n for n in self.edges[names[i]] if n not in names]
+            i += 1
+        ints, strs = [], []
+        for n in names:
+            body = self.by_name[n].body
+            a, b = literals([s for s in body if s.kind != "example"])
+            c, d = literals([s for s in body if s.kind == "example"])
+            ints += a + c
+            strs += b + d
+        ints = [c for c in dict.fromkeys(ints) if 1 < abs(c) <= SEED_MAX][:SEED_LITERALS]
+        return [v for c in ints for v in (c, c - 1, c + 1)], list(dict.fromkeys(x for x in strs if x))[:SEED_LITERALS]
 
     def search_block(self, f, out):
         """One function's search: depth by depth (so the first counterexample found is a small one), every
@@ -554,6 +618,9 @@ class LeanEmitter:
         out.append("  let mut cl_sum : Nat := 0")
         out.append("  let mut cl_tried : Nat := 0")
         out.append("  let mut cl_seen : Array UInt64 := #[]")
+        ints, strs = self.seeds(f)
+        out.append(f"  let cl_si : Array Int := #[{', '.join(str(v) for v in ints)}]")
+        out.append(f"  let cl_ss : Array String := #[{', '.join(lean_str(v) for v in strs)}]")
         out.append(f"  for cl_d in [0:{CX_DEPTHS if f.params else 1}] do")
         for j, (n, t, _) in enumerate(f.params):
             out.append(f"    let cl_s{j} := {small_of(t, 'cl_d')}")

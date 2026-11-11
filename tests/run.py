@@ -23,8 +23,8 @@ def wanted(f):
 
 
 def backend_ok(f):
-    """A test can name the backends it's for on its first line, e.g. `# backends: lean` (Int past 64 bits)."""
-    m = re.match(r"#\s*backends:\s*(.*)", open(f).readline())
+    """A test can name the backends it's for in its first two lines, e.g. `# backends: lean` (Int past 64 bits)."""
+    m = re.search(r"^#\s*backends:\s*(.*)$", "".join(open(f).readlines()[:2]), re.M)
     name = BACKEND[1] if BACKEND else "lean"
     return m is None or name in m.group(1).split()
 
@@ -95,7 +95,7 @@ for f in sorted(f for f in glob.glob(os.path.join(HERE, "ok", "*.cl")) if wanted
         failed += 1
         print(f"FAIL {os.path.relpath(f, HERE)}: exit {r.returncode}\n--- stdout\n{r.stdout}--- want\n{want}"
               f"--- stderr\n{r.stderr}")
-for f in sorted(filter(wanted, glob.glob(os.path.join(HERE, "err", "*.cl")))):
+for f in sorted(f for f in glob.glob(os.path.join(HERE, "err", "*.cl")) if wanted(f) and backend_ok(f)):
     m = re.match(r"#\s*expect:\s*(.*)", open(f).readline())
     want = sorted(m.group(1).split())
     r = subprocess.run([sys.executable, CLC, "test", "--json", *BACKEND, f], capture_output=True, text=True)

@@ -3272,13 +3272,18 @@ def lean_main(args, d, fns, structs):
             shutil.copy(lfile, exe + ".lean")
         try:
             # `test` needs only elaboration, which runs the examples; the C is for building a binary.
-            cmd = [lean, lfile] if args.command == "test" else [lean, "-c", cfile, lfile]
+            # A 64 MB stack: an example that recurses without end then stops within seconds ("deep recursion")
+            # instead of growing by ~100 MB a second until the timeout. It still allows tens of thousands of
+            # calls inside each other.
+            cmd = [lean, "-s", "65536", lfile] if args.command == "test" else [lean, "-s", "65536", "-c", cfile, lfile]
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=120, cwd=tmp)
             out, err, code, timed_out = r.stdout, r.stderr, r.returncode, False
         except subprocess.TimeoutExpired as te:
             out = te.stdout.decode() if isinstance(te.stdout, bytes) else (te.stdout or "")
             err, code, timed_out = "", None, True
         lean_errors = [ln for ln in out.splitlines() if ln.startswith(lfile + ":") and ": error" in ln]
+        if code not in (0, 70) and "deep recursion was detected" in err and "EXRUN" in out and not lean_errors:
+            code, err = 70, "its recursion got too deep; it probably never stops"
         if lean_errors or (code not in (0, 70) and not timed_out):
             keep_tmp = True
             shown = "\n".join(ln for ln in out.splitlines() if not ln.startswith("EX"))

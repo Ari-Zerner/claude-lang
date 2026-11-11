@@ -445,6 +445,12 @@ Claude differs from a human programmer in ways that matter for language design:
     values of its parameters that the `requires` allow, smallest first: Ints 0, 1, -1, ... to ±16, then a few
     usual edges (99, 100, 101, 255, 256, ±1000, ...); lists up to four items long; structs and enums from their
     fields' values; `Option`/`Result` around those. Up to 3000 distinct calls or 1.5 s per function.
+  - *The function's own literals are inputs too,* since that's where its branches are: each Int literal `c`
+    in the function (and in the functions it calls) goes in as `c`, `c - 1` and `c + 1`, the ones compared
+    with something first (`income < 40000`), one literal per depth, up to 12 of them and none above 100000
+    (a loop to 1000000007 would only time out); each String literal goes in as it is (`cmd == "north"`).
+    Without them `tax(income: 40000) returns 0`, a forgotten boundary, is out of reach; with them it's found
+    at depth 1.
   - *The function's own run-time checks are the judge* (D29), so the search file is the program as it runs,
     plus the loops. Three findings:
     - `ensures-false` (error): `` `ensures result >= 0` is false: wrong_abs(x: -6) returns -6 ``.
@@ -463,11 +469,13 @@ Claude differs from a human programmer in ways that matter for language design:
   - *Two hazards met on the way:* endless non-tail recursion grows Lean's interpreter stack by ~100 MB a
     second, so the search runs with a 16 MB stack (`lean -s`), where it's "deep recursion" within a second;
     and an endless loop is told from a swapping machine by CPU time, not wall time.
-  - *Limits:* it only finds small counterexamples. A bug past the values above (a tax bracket at 40000) is
-    missed: the function's own literals, ±1, should seed the Int values next. Lists longer than four items
-    aren't tried. Io functions and functions with no unproved `ensures` aren't searched (a function with no
-    contract at all could be searched for crashes too; not decided). The same hazards exist for `example`s
-    in the main run, which still uses Lean's default stack.
+  - *Limits:* it only finds counterexamples made of small values and the program's literals: a boundary the
+    code computes (`limit * 2`) rather than writes is missed. Lists longer than four items aren't tried. Io functions and functions with no unproved `ensures` aren't searched (a function with no
+    contract at all could be searched for crashes too; not decided).
+  - *Examples got the stack limit too:* the main run uses a 64 MB stack, so an `example` that recurses
+    without end is `example-crashed` ("its recursion got too deep") in seconds, where it used to grow until
+    the 120 s timeout. 64 MB holds between 10000 and 100000 calls inside each other (measured: 16 MB holds
+    10000, 256 MB holds 100000), more than an example needs; the built program has no such limit.
 
 ## Open questions
 

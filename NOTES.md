@@ -517,6 +517,22 @@ design and its decisions (D1...).
   endless `while` needs a CPU-time limit, since wall time on this box lies.
   **Lean 35/35** (the full run plus a re-run of the four contracts tests after the last edits), **C 31/31 + 2 skipped.**
 
+- 2026-11-11 (night 7, step 2): **D32 follow-ups: the search tries the function's own literals, and examples
+  can't run away.** `cl_lean.py`: `literals` (Int and String literals of a function, compared Ints first),
+  `LeanEmitter.seeds` (own literals, then examples', then callees'; `c, c - 1, c + 1`; at most 12, none above
+  100000), `clSeeded` in the search prelude; every generator takes the seeds (`cl_si`, `cl_ss`), so they
+  reach Ints inside lists and structs too. One literal joins per depth, so a three-parameter function still
+  gets the first two or three crossed with small values. New `tests/err/contracts-seeds.cl`:
+  `tax(income: 40000) returns 0` (the boundary between `< 40000` and `> 40000` forgotten) and
+  `turn(cmd: "back") returns -180`, both out of reach before. `tests/ok/contracts.cl`'s hidden bug moved
+  again, below -5000000 (a literal too large to be tried).
+  **Examples:** the main Lean run now has a 64 MB stack (`lean -s 65536`); an example that recurses without
+  end is `example-crashed: ... its recursion got too deep; it probably never stops` after ~2 s of CPU, where
+  it used to grow ~100 MB/s for up to 120 s (new `tests/err/example-endless.cl`, Lean only: `tests/run.py`
+  now honors `# backends:` in err tests and on the second line). Interpreter depth measured: 16 MB holds
+  10000 nested calls but not 100000; 256 MB holds 100000 (peak RSS 775 MB when it fails at 1000000).
+  **Lean 37/37, C 31/31 + 3 skipped** (the three contract tests that need Lean; `example-endless` is Lean only).
+
 ## Next step
 1. **Formal verification** (Ari, 2026-11-07: "we definitely want proofs, not just fuzzing"; see
    DESIGN.md open questions): contracts (`requires`/`ensures`), build-time counterexample search,
@@ -546,10 +562,9 @@ design and its decisions (D1...).
      `grind` (with functional induction for recursion) or reported `unproved`. **Next, in order:** (1) modular
      proofs: **done, D31 (step 6)**, except proving each call's `requires`, which needs per-call-site theorems
      with the path condition or a model where traps are visible (D31 says why); (2) a counterexample for an unproved `ensures`:
-     **done, D32 (night 7 step 1)**, by calling the function on small inputs. Follow-ups, small: seed the Int
-     values with the function's own literals ±1 (a bracket at 40000 is out of reach today); lists longer than
-     four items from a tiny item pool; give the main run's examples the 16 MB stack too; maybe search
-     functions with no contract for crashes (run it over the trial corpus first to see how much it flags); (3) loops: `for` over
+     **done, D32 (night 7 steps 1-2)**, by calling the function on small inputs and its own literals.
+     Follow-ups left, small: lists longer than four items from a tiny item pool; maybe search functions with
+     no contract for crashes (run it over the trial corpus first to see how much it flags); (3) loops: `for` over
      ranges first, with `invariant` lines, likely by emitting the loop as a local recursive function; then
      `while` with a `decreases` measure; (4) a `grind` heartbeat cap that degrades to the `clUnproved` axiom (a timeout is an error today).
      Optional anytime: a precompiled prelude module (saves ~40% of the C compile).
