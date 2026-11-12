@@ -724,6 +724,19 @@ design and its decisions (D1...).
   failed; that is item (iii).
   **Lean 42/42, C 32/32 + 3 skipped.**
 
+- 2026-11-12 (night 8, wrap-up): six steps. Loop proofs may use a `let` made from the parameters. Then the
+  proof trial, which turned into a prover clean-up before and after a model was asked: writing reference
+  answers found that a false `and` isn't split, that a value written in two places was two terms, that
+  proofs depended on the length of the file's path (places are `clAt line col` now), that a contract
+  calling a function needs its definition, and that a loop with a `return` couldn't use its invariant;
+  Haiku's answers found that proofs didn't know what `%` is. Haiku, given SPEC.md and a contract: 7 of 7
+  first answers proved on the first set, 6 of 7 on the harder one (the seventh after one fix). The same
+  first-set answers on last night's compiler: 2 of 7. Nothing is parked half-done; Lean 42/42, C 32/32 + 3
+  skipped. **Start next time at (iii) under "Next step": say which part of a loop proof failed.** Small
+  things seen on the way: `clc.py run --emit-lean` writes no `.lean` (only `build` does); the full Lean
+  suite takes 7 minutes on the loaded box, so a step that changes the prover waits on it twice (maybe a
+  `run.py --proofs` that runs only the files with `ensures`).
+
 ## Next step
 1. **Formal verification** (Ari, 2026-11-07: "we definitely want proofs, not just fuzzing"; see
    DESIGN.md open questions): contracts (`requires`/`ensures`), build-time counterexample search,
