@@ -673,6 +673,24 @@ design and its decisions (D1...).
   no-loop case (`ensures result == double(double(n))`); six `ensures`, all proved.
   **Lean 41/41, C 32/32 + 3 skipped.**
 
+- 2026-11-12 (night 8, step 4): **the proof trial: Haiku 7 of 7, first try.** `trials/prove.py`: each task
+  gives the model SPEC.md and a function's first lines (name, `requires`, `ensures`, an example; for three
+  tasks a recursive helper the `ensures` calls) and asks for the function written with a loop. It checks
+  that the contract lines are the ones given, that a hidden `main` prints the right thing, that the body
+  keeps the task's rules (a loop, no recursion, no `*` in `mul`, no `/` or `%` in `divide`), and that clc
+  reports nothing unproved; an answer that isn't there goes back with clc's words, up to twice. `--reference`
+  grades my own answers (7 of 7 proved, including two new ones, `sum` against `sum_spec(xs, n)` and `power`
+  against `pow_spec`); `--replay RUN.md [--clc OTHER]` grades an earlier run's first answers again.
+  **Haiku: mul, divide, count_evens, find_index, fib, sum, power all proved on the first answer**, no fix
+  round used (`results/2026-11-12-1303-prove-haiku.md`). Its answers aren't mine: `mul` and `power` are
+  `while` loops with their own counter and `decreases`, `find_index` keeps a `found` variable with
+  `invariant found == -1 or (found >= 0 and found < i and xs[found] == want)` instead of returning early,
+  `count_evens` went straight to an index loop with `count <= i`. **The same seven answers on the compiler
+  from before steps 2-3: 2 of 7** (`mul`, `count_evens`; `results/2026-11-12-1307-prove-replay-haiku.md`).
+  So writing the invariants wasn't the hard part for the model on this set; the prover was what stood in
+  the way, and the reference answers found that before any model was asked. Sonnet not run: nothing here
+  separates models. The set is too easy to show where the limits are.
+
 ## Next step
 1. **Formal verification** (Ari, 2026-11-07: "we definitely want proofs, not just fuzzing"; see
    DESIGN.md open questions): contracts (`requires`/`ensures`), build-time counterexample search,
@@ -716,10 +734,14 @@ design and its decisions (D1...).
      Open from it: a `grind` that runs out of heartbeats is still a Lean error, and unfolding recursive
      functions makes that likelier, so item (4) below (a cap that falls back to the axiom) has moved up;
      and no test compiles from a long path (the cause is gone by construction, the check was by hand).
-     (ii) the trial: give
-     Haiku/Sonnet the SPEC paragraph and five loop functions with `ensures` (mul by adding, divide by
-     subtracting, count evens with an index loop, find_index, fib vs fib_spec), each with a reference answer
-     that proves, and see whether the invariants they write prove; (iii) which goal failed (entry / kept /
+     (ii) **done (night 8 step 4)**: Haiku 7 of 7 on the first answer (`trials/prove.py`). Next for the
+     trial, a harder set, each task with a reference answer first (that is what finds prover gaps):
+     binary search (`while lo < hi`, `decreases hi - lo`), gcd by a loop against a recursive `gcd_spec`,
+     factorial and digit sum against their definitions, reversing a list (`length(result) == length(xs)`),
+     a task where the model must write the helper definition itself, and ones that sit on today's limits
+     to see what the model does there (`for x in xs`, a `break`, nested loops, a local from an earlier
+     loop). Also worth a sentence in SPEC once a trial shows it's needed: a contract may call another
+     function as the definition to agree with. (iii) which goal failed (entry / kept /
      enough): `trials/lean/goals.py` (`all_goals first | TAC | (mleave; trace_state; sorry)`) shows it
      for one theorem and could become a clc flag or a better `unproved` reason; then (c) and (d).
      (c) run-time checks: each `invariant` (not as an early `return`: try `v := clGuard ok msg v` on one state

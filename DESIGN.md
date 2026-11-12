@@ -573,6 +573,11 @@ Claude differs from a human programmer in ways that matter for language design:
     local that depends on a `var` or on an earlier loop's result (`let m = t` after a loop that counts
     `t`); the warning names the variable and says why. That one needs the invariant to be stated where the
     earlier loop's final state is in scope, which `mvcgen`'s `inv` goals don't offer.
+  - *First trial (2026-11-12, night 8, `trials/prove.py`):* given only SPEC.md and a function's contract,
+    Haiku wrote loops with invariants that clc proved for 7 of 7 functions on its first answer (multiply
+    by adding, divide by subtracting, count evens, find an index, and `fib`, `sum` and `power` each against a
+    recursive definition). On the compiler as it was a day earlier the same answers proved 2 of 7: the
+    gaps were in the automation (D30's night-8 point), not in the invariants.
   - *Not yet decided or tried:* a run-time check of each invariant (wanted: then D32's search can show a
     false one with its input; it must not be an early `return`, which would change the loop's shape for the
     proof); a run-time check that `decreases` goes down, so an unproved loop can't hang; `break` (the state
