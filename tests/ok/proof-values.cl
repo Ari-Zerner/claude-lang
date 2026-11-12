@@ -1,8 +1,9 @@
 # backends: lean
-# Two things a contract proof used to trip on (night 8), though the invariants were right:
-# an `ensures a and b` whose parts need arithmetic to follow from what's known, and a value written twice
-# (`xs[i]` in the body, `xs[result]` in the `ensures`; the same for `%` and `/`), which must be one value to
-# the proof wherever it is written. Every `ensures` here is proved.
+# Things a contract proof used to trip on (night 8), though the invariants were right:
+# an `ensures a and b` whose parts need arithmetic to follow from what's known; a value written twice
+# (`xs[i]` in the body, `xs[result]` in the `ensures`; the same for `%`, `/` and a call to a function with a
+# `requires`), which must be one value to the proof wherever it is written; and a contract that calls another
+# function, whose definition the proof has to open. Every `ensures` here is proved.
 
 # division by repeated subtraction: `a < (q + 1) * b` follows from `q * b + r == a` and `r < b`
 fn divide(a: Int, b: Int) -> Int
@@ -51,9 +52,47 @@ fn next_square(n: Int) -> Int
   return n * n + 2 * n + 1
 end fn next_square
 
+# a loop proved equal to a recursive definition: the invariant and the `ensures` call `fib_spec` in three
+# places, and the proof needs what `fib_spec` is
+fn fib_spec(n: Int) -> Int
+  requires n >= 0
+  if n < 2
+    return n
+  end if
+  return fib_spec(n - 1) + fib_spec(n - 2)
+end fn fib_spec
+
+fn fib(n: Int) -> Int
+  requires n >= 0
+  ensures result == fib_spec(n)
+  example fib(10) == 55
+  var a = 0
+  var b = 1
+  for i in 0 until n
+    invariant a == fib_spec(i) and b == fib_spec(i + 1)
+    let t = a + b
+    a = b
+    b = t
+  end for
+  return a
+end fn fib
+
+# the same with no loop and no recursion: `double` has no `ensures`, so only its definition can say this
+fn double(n: Int) -> Int
+  return n + n
+end fn double
+
+fn quad(n: Int) -> Int
+  ensures result == double(double(n))
+  example quad(3) == 12
+  return 4 * n
+end fn quad
+
 fn main() uses io
   print(divide(a: 100, b: 7))
   print(find_index(xs: [1, 2, 3], want: 2))
   print(split(a: 23, b: 4))
   print(next_square(9))
+  print(fib(30))
+  print(quad(5))
 end fn main

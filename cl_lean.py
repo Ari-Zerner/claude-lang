@@ -41,16 +41,23 @@ prints `msg` and exits 70. -/
 @[implemented_by clTrapImpl, noinline, never_extract]
 def clTrap {α : Type} [Inhabited α] (msg : String) : α := default
 
+def clFile : String := @FILESTR@
+def clAtImpl (line col : Nat) : String := clFile ++ ":" ++ toString line ++ ":" ++ toString col
+/-- A place in the source, `file:line:col`, for a trap's message. To the kernel every place is `""`: a place is
+no part of any value (a trap is `default` whatever it would print), and to a proof `xs[i]` or a call `f(x)` must
+be one value wherever it is written, which `clAt_eq` gives `grind`. It also keeps the file's path out of every
+term: with a 100-character path in each place, `grind` ran out of recursion depth comparing them. At run time
+it is the real place; `clAt 6 10` is a closed term, so it is computed once, not on each pass of a loop. -/
+@[implemented_by clAtImpl] def clAt (line col : Nat) : String := ""
+@[grind =] theorem clAt_eq (line col : Nat) : clAt line col = "" := rfl
+
 @[inline] def clDiv (a b : Int) (msg : String) : Int := if b == 0 then clTrap msg else a / b
 @[inline] def clMod (a b : Int) (msg : String) : Int := if b == 0 then clTrap msg else a % b
 /-- What termination proofs need about `%` (D28): gcd's `b.natAbs` goes down because `a % b` is below `|b|`. -/
 theorem clMod_bound (a b : Int) (m : String) (h : b ≠ 0) : 0 ≤ clMod a b m ∧ clMod a b m < b.natAbs := by
   simp only [clMod, beq_iff_eq, h, ite_false]; exact ⟨Int.emod_nonneg a h, Int.emod_lt a h⟩
-/-- To a proof, `a / b` and `a % b` are worth the same wherever they are written: the message a trap would print
-isn't part of the value. Without these, `a % b` in an `ensures` and `a % b` in the body are two different terms
-to `grind`. `/` is Lean's own (0 when b is 0, which is also what a trap is worth); `%` isn't (`a % 0` is `a`). -/
-def clModV (a b : Int) : Int := clMod a b ""
-@[grind =] theorem clMod_v (a b : Int) (m : String) : clMod a b m = clModV a b := by simp only [clModV, clMod, clTrap]
+/-- To a proof `a / b` is Lean's own `/`: 0 when b is 0, which is also what a trap is worth. (`%` isn't Lean's:
+`a % 0` is `a` there. Two `a % b` written in different places are one term because their places are, `clAt_eq`.) -/
 @[grind =] theorem clDiv_v (a b : Int) (m : String) : clDiv a b m = a / b := by
   simp only [clDiv, clTrap]; split <;> simp_all <;> rfl
 
@@ -92,10 +99,6 @@ def clIndexMsg (loc : String) (i : Int) (n : Nat) : String :=
 /-- `xs[i]`, stopping the program when i is out of range. -/
 @[inline] def clGet {α : Type} [Inhabited α] (xs : Array α) (i : Int) (loc : String) : α :=
   if h : 0 ≤ i ∧ i.toNat < xs.size then xs[i.toNat]'h.2 else clTrap (clIndexMsg loc i xs.size)
-/-- `xs[i]` is worth the same to a proof wherever it is written (as `clMod_v`). -/
-def clGetV {α : Type} [Inhabited α] (xs : Array α) (i : Int) : α := clGet xs i ""
-@[grind =] theorem clGet_v {α : Type} [Inhabited α] (xs : Array α) (i : Int) (loc : String) :
-    clGet xs i loc = clGetV xs i := by simp only [clGetV, clGet, clTrap]
 /-- `xs[i] = v`; in place when xs isn't shared, which is Lean's own refcounting (D19). -/
 @[inline] def clSet {α : Type} (xs : Array α) (i : Int) (v : α) (loc : String) : Array α :=
   if h : 0 ≤ i ∧ i.toNat < xs.size then xs.set i.toNat v h.2 else clTrap (clIndexMsg loc i xs.size)
@@ -499,9 +502,13 @@ grind_pattern clMod_pos => clMod a b m
 # letter, something already known.
 GRIND_HINTS = "[clMod_bound, Bool.and_eq_false_iff]"
 
-# The one tactic that closes every goal `mvcgen` leaves (D33): drop the trap messages and the list lengths, then grind.
-LOOP_TACTIC = ("(mleave; (try simp only [clTrap, List.length_append, List.length_cons, List.length_nil, "
-               f"Int.length_toList_rcc, Int.length_toList_rco] at *); grind {GRIND_HINTS})")
+
+
+def loop_tactic(hints):
+    """The one tactic that closes every goal `mvcgen` leaves (D33): drop the trap messages and the list lengths,
+    then grind."""
+    return ("(mleave; (try simp only [clTrap, List.length_append, List.length_cons, List.length_nil, "
+            f"Int.length_toList_rcc, Int.length_toList_rco] at *); grind {hints})")
 
 
 def assigned_in(stmts):
@@ -576,10 +583,14 @@ class LeanEmitter:
         return len(comp) > 1 or comp[0] in self.edges[comp[0]]
 
     def loc(self, tok):
-        return f"{self.path}:{tok.line}:{tok.col}"
+        """A place in the source as a Lean String term (`clAt`, in the prelude, says why it isn't a literal)."""
+        return f"(clAt {tok.line} {tok.col})"
 
     def trap_msg(self, tok, what):
-        return lean_str(f"{self.loc(tok)}: runtime error: {what}")
+        return f"({self.loc(tok)} ++ {lean_str(': runtime error: ' + what)})"
+
+    def prelude(self):
+        return PRELUDE.replace("@FILESTR@", lean_str(self.path)).replace("@FILE@", json.dumps(self.path))
 
     # -- top level
 
@@ -588,7 +599,7 @@ class LeanEmitter:
         prove terminating (D28): types and functions as usual (recursive ones `partial`), then each recursive
         group again under every candidate measure, renamed `clT<i>_<name>`, each followed by `#print axioms`
         (a failed termination proof leaves `sorryAx`). No examples and no main."""
-        out = [PRELUDE.replace("@FILE@", json.dumps(self.path))]
+        out = [self.prelude()]
         self.size_lemmas = {}
         self.type_decls(out)
         for comp in self.comps:
@@ -640,7 +651,7 @@ class LeanEmitter:
         function's own run-time checks do the judging: a broken `ensures`, a bad index or a callee's broken
         `requires` stops Lean with exit 70 and the usual message, and the last `CXRUN` line says which call
         it was. So one run finds at most one counterexample; clc runs again for the functions after it."""
-        out = [PRELUDE.replace("@FILE@", json.dumps(self.path))]
+        out = [self.prelude()]
         self.size_lemmas = {}
         self.type_decls(out)
         for comp in self.comps:
@@ -702,7 +713,7 @@ class LeanEmitter:
         combination of its parameters' small values, until CX_CAP calls, CX_TRIED distinct inputs or CX_MS.
         An input the `requires` turn away isn't a call."""
         reqs = contracts(f, "requires")
-        args = " ".join(([lean_str(self.loc(f.name_tok))] if reqs else []) + [f"v_{n}" for n, _, _ in f.params])
+        args = " ".join(([self.loc(f.name_tok)] if reqs else []) + [f"v_{n}" for n, _, _ in f.params])
         call = f"({self.lname(f.name)} {args or '()'})"
         ok = " && ".join(f"({self.expr(r.expr)})" for r in reqs) or "true"
         out.append("")
@@ -998,6 +1009,29 @@ class LeanEmitter:
                    "together they aren't enough for this `ensures`")
         return terms, why
 
+    def spec_fns(self, f):
+        """The functions a proof about fn f may have to open up: those its contract lines call (`ensures result
+        == fib_spec(n)`, `invariant a == fib_spec(i)`), and those they call in turn. A callee in f's body is not
+        one of them: it speaks through its own `ensures` (D31). Only functions Lean has a definition for that
+        can be unfolded: pure ones that D28 made total. Not f itself, which its own proof already unfolds."""
+        called = set()
+        for kind in ("requires", "ensures", "invariant", "decreases"):
+            calls_in(nodes_of(f.body, kind), called)
+        todo, seen = [c for c in called if c in self.by_name], set()
+        while todo:
+            g = todo.pop()
+            if g in seen or g == f.name:
+                continue
+            seen.add(g)
+            todo += [c for c in calls_in(self.by_name[g].body, set()) if c in self.by_name]
+        out = []
+        for comp in self.comps:
+            for g in comp:
+                partial = self.is_recursive(comp) and self.how.get(tuple(comp)) == "partial"
+                if g in seen and not self.by_name[g].uses_io and not partial:
+                    out.append(self.lname(g))
+        return out
+
     def spec_theorems(self, out):
         """D30: each `ensures` of a pure, total function as a theorem whose hypotheses are its `requires`, proved
         by a fixed list of tactics with the callees' `ensures` theorems as lemmas (modular, D31). One that isn't
@@ -1022,7 +1056,7 @@ class LeanEmitter:
                     self.specs += [(f, c, None, why) for c in ens]
                     continue
                 # Callees' `ensures` reach grind through `grind_pattern` (below), which fires on any call.
-                hints = GRIND_HINTS
+                hints = GRIND_HINTS[:-1] + "".join(f", {g}" for g in self.spec_fns(f)) + "]"
                 reqs = contracts(f, "requires")
                 names = (["cl_loc"] if reqs else []) + [f"v_{n}" for n, _, _ in f.params]
                 binders = (["(cl_loc : String)"] if reqs else []) + [
@@ -1044,7 +1078,7 @@ class LeanEmitter:
                             self.loop_proofs = True
                         script = [f"(generalize cl_h : {call} = cl_r", "     apply Id.of_wp_run_eq cl_h", "     mvcgen"]
                         script += [f"     case inv{i + 1} => exact {t}" for i, t in enumerate(terms)]
-                        script.append(f"     all_goals {LOOP_TACTIC})")
+                        script.append(f"     all_goals {loop_tactic(hints)})")
                         tactics = ["\n".join(script)]
                 for j, c in enumerate(ens):
                     thm = f"clSpec_{name}_{j}"
@@ -1154,7 +1188,7 @@ class LeanEmitter:
         out.append(f"{ind}let cl_result : {ltype(f.ret, 'result')} := {self.expr(s.expr)}")
         self.names = {"result": "cl_result"}
         for c in contracts(f, "ensures"):
-            what = lean_str(f"{self.loc(s.tok)}: runtime error: ")
+            what = f"{self.loc(s.tok)} ++ {lean_str(': runtime error: ')}"
             tail = lean_str(f", which breaks `ensures {c.text}` (line {c.tok.line})")
             out.append(f"{ind}if !({self.expr(c.expr)}) then")
             out.append(f"{ind}  return clTrap ({what} ++ {self.call_text(f)} ++ {lean_str(' returned ')} ++ "
@@ -1295,7 +1329,7 @@ class LeanEmitter:
             if x.kind == "field":
                 inner = f"cl_v{t}" if last else update(j + 1, f"{cur}.v_{x.name}")
                 return f"{{ {cur} with v_{x.name} := {inner} }}"
-            loc = lean_str(self.loc(x.tok))
+            loc = self.loc(x.tok)
             if last:
                 return f"clSet {cur} cl_i{t}_{j} cl_v{t} {loc}"
             return f"clModify {cur} cl_i{t}_{j} (fun cl_r{j} => {update(j + 1, f'cl_r{j}')}) {loc}"
@@ -1332,7 +1366,7 @@ class LeanEmitter:
             items = ", ".join(self.expr(x) for x in e.items)
             return f"(#[{items}] : {ltype(e.ty, 'a list')})"
         if k == "index":
-            return f"(clGet {self.expr(e.base)} {self.expr(e.index)} {lean_str(self.loc(e.tok))})"
+            return f"(clGet {self.expr(e.base)} {self.expr(e.index)} {self.loc(e.tok)})"
         if k == "field":
             return f"{self.expr(e.base)}.v_{e.name}"
         if k == "name":
@@ -1404,7 +1438,7 @@ class LeanEmitter:
         elif e.name in self.by_name:
             args = " ".join(self.expr(a) for _, _, a in e.args)
             if contracts(self.by_name[e.name], "requires"):
-                args = f"{lean_str(self.loc(e.tok))} {args}".strip()
+                args = f"{self.loc(e.tok)} {args}".strip()
             c = f"{self.lname(e.name)} {args or '()'}"
         else:
             raise Unsupported(f"the built-in `{e.name}` (line {e.tok.line})")

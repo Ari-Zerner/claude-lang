@@ -654,6 +654,25 @@ design and its decisions (D1...).
   compiler from a copy (`git show HEAD:cl_lean.py > elsewhere`), never by changing the tree mid-run.
   **Lean 41/41, C 32/32 + 3 skipped.**
 
+- 2026-11-12 (night 8, step 3): **`fib` is proved equal to `fib_spec`; places left the proof terms.** Three
+  changes in `cl_lean.py`. (1) A place is now the Lean term `clAt line col`, not a string literal: `""` to
+  the kernel, `file:line:col` at run time (`implemented_by`; the path sits in one constant, `clFile`). One
+  `grind` rule, `clAt_eq`, makes all places equal, so `xs[i]`, `%`, and calls to functions with `requires`
+  are one term wherever written. It replaces step 2's `clGet_v`/`clMod_v` (which didn't cover user
+  functions); `clDiv_v` stays. (2) That also fixed a bug I hadn't known about: **proofs depended on the
+  length of the file's path.** With `fib_spec` unfolded, `grind` hit "maximum recursion depth" when the
+  program was compiled from the 107-character scratch path, and proved the same thing from a short path
+  (found by bisecting: the equation is small, the messages alone are harmless, `maxRecDepth 1024` or a
+  short path both fix it). (3) `spec_fns`: functions called from a function's contract lines, and what
+  they call, go to `grind` as definitions to unfold (pure, total ones). Dead ends: a per-function lemma
+  `f_g loc x = f_g "" x` (works, proved by `unfold f_g; simp only [clTrap]`, but needs a proof per
+  function and leaves the long literals in); a hand-written clean definition lemma (works, but clc would
+  have to write each function's body twice). Checked: trap messages show the same place as before
+  (`trap.cl:16:9: runtime error: this call breaks ...`), and a 3M-pass loop with `xs[i % 3]` takes the same
+  time (0.12 s), so `clAt` isn't computed per pass. `tests/ok/proof-values.cl` gains `fib`/`fib_spec` and a
+  no-loop case (`ensures result == double(double(n))`); six `ensures`, all proved.
+  **Lean 41/41, C 32/32 + 3 skipped.**
+
 ## Next step
 1. **Formal verification** (Ari, 2026-11-07: "we definitely want proofs, not just fuzzing"; see
    DESIGN.md open questions): contracts (`requires`/`ensures`), build-time counterexample search,
@@ -693,10 +712,11 @@ design and its decisions (D1...).
      mention only parameters and the loop's own variables.
      Locals in invariants: **done for `let`s made from parameters (night 8 step 1)**; a local that comes
      from a `var` or an earlier loop is still out (D33 says what it would need).
-     **Next, in order:** (i) calls to functions with `requires` as one term wherever written (a per-function
-     lemma `f_g loc x = f_g "" x`, or keep `cl_loc` out of the theorem's view), then the spec function's
-     definition as a `grind` hint, so `fib` proves against `fib_spec` (night 8 step 2 has the case; the
-     reference answers are in that step's notes and `tests/ok/proof-values.cl`); (ii) the trial: give
+     **Next, in order:** (i) **done (night 8 step 3)**: `fib` proves against `fib_spec` (`clAt`, `spec_fns`).
+     Open from it: a `grind` that runs out of heartbeats is still a Lean error, and unfolding recursive
+     functions makes that likelier, so item (4) below (a cap that falls back to the axiom) has moved up;
+     and no test compiles from a long path (the cause is gone by construction, the check was by hand).
+     (ii) the trial: give
      Haiku/Sonnet the SPEC paragraph and five loop functions with `ensures` (mul by adding, divide by
      subtracting, count evens with an index loop, find_index, fib vs fib_spec), each with a reference answer
      that proves, and see whether the invariants they write prove; (iii) which goal failed (entry / kept /

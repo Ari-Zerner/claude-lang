@@ -418,21 +418,34 @@ Claude differs from a human programmer in ways that matter for language design:
     the `ensures` line, with the reason: a `while`/`for` loop (not provable yet), a function D28 left
     `partial`, io, or "the automation didn't find a proof" (which includes a false `ensures` that no example
     reaches, like `wrong_abs` returning `x` for `x < -5`). `clc test` ends with "N of M `ensures` proved".
-  - *Two things the automation needed, found by writing reference answers for a proof trial (2026-11-12,
-    night 8): three of five correct answers didn't prove, and the invariants weren't at fault.*
-    (1) **A value written twice must be one term.** `xs[i]`, `a / b` and `a % b` compile to helpers that
-    carry the place they were written, for the trap's message, so `xs[i]` in the body and `xs[result]` in
-    the `ensures` were different terms to `grind`, and so was `a % b` in two places. The message is no
-    part of the value (a trap is `default` to the kernel), so the prelude says so once, as rewrite rules
-    `grind` always has: `clGet xs i loc = clGetV xs i`, `clMod a b m = clModV a b`, `clDiv a b m = a / b`
-    (`/` really is Lean's, which is 0 for a zero divisor; `%` isn't, since Lean's `a % 0` is `a`). `clDiv` is
-    no longer unfolded as a hint. (2) **`grind` doesn't split an `and` that is false.** The check on a
-    function's way out is `not (a and b)`, and from that alone `grind` learned nothing about `a` or `b`, so
-    a two-part `ensures` was proved only when each part was already known letter for letter (isqrt's is,
-    which is why it passed). One library lemma in the hints, `Bool.and_eq_false_iff`, makes the split.
-    Still open from the same exercise: a call to a function with a `requires` also carries its place
-    (`f_g "file:line" x`), so `fib_spec(i)` in an invariant and `fib_spec(n)` in the `ensures` don't meet;
-    and proving a loop equal to a recursive function needs that function's definition unfolded.
+  - *What the automation needed, found by writing reference answers for a proof trial (2026-11-12, night 8):
+    three of six correct answers didn't prove, and the invariants weren't at fault.*
+    (1) **A value written twice must be one term.** `xs[i]`, `a / b`, `a % b` and a call to a function with a
+    `requires` each carry the place they were written, for the trap's message, so `xs[i]` in the body and
+    `xs[result]` in the `ensures` were different terms to `grind`, and so were `fib_spec(i)` in an invariant
+    and `fib_spec(n)` in the `ensures`. A place is no part of any value (a trap is `default` to the kernel
+    whatever it would print), so now a place is the term `clAt line col`, which the kernel takes to be `""`
+    and the running program computes as `file:line:col` (`implemented_by`, the same device as `clTrap`; a
+    place only ever reaches a trap's message). One rule, `clAt line col = ""`, which `grind` always has,
+    makes every place the same, and congruence does the rest for every helper and every user function at
+    once. A first version (rewrite rules per helper, `clGet xs i loc = clGetV xs i`) lasted an hour: it
+    didn't cover user functions.
+    (2) **A proof must not depend on how long the file's path is.** With places as string literals holding
+    the path, `grind` ran out of recursion depth on the fib proof when the file sat under a 100-character
+    directory, and proved it when the path was short. `clAt` takes the path out of every term (it is in one
+    constant, `clFile`), so that can't happen again. Compiled, `clAt 6 10` is a closed term that Lean
+    computes once: a 3M-pass loop with an index in it runs as fast as before.
+    (3) **`grind` doesn't split an `and` that is false.** The check on a function's way out is `not (a and
+    b)`, and from that alone `grind` learned nothing about `a` or `b`, so a two-part `ensures` was proved
+    only when each part was already known letter for letter (isqrt's is, which is why it passed). One
+    library lemma in the hints, `Bool.and_eq_false_iff`, makes the split.
+    (4) **A contract that calls a function needs that function's definition.** `ensures result ==
+    fib_spec(n)` can only be proved by opening `fib_spec`. So the functions a function's contract lines
+    call (`requires`, `ensures`, `invariant`, `decreases`), and those they call, are handed to `grind` to
+    unfold (`spec_fns`), when they are pure and total. A callee in the body is not opened: it speaks
+    through its own `ensures` (D31). With (1) to (4), an iterative `fib` is proved equal to the recursive
+    `fib_spec` from `invariant a == fib_spec(i) and b == fib_spec(i + 1)`. Also `clDiv a b m = a / b` is a
+    rule now (`/` really is Lean's, 0 for a zero divisor), in place of unfolding `clDiv`.
   - *Not yet:* call-site proofs of `requires` (D31), loops (`invariant`), a heartbeat limit for a slow
     `grind` (a timeout would be an error, not a `sorry`). Counterexamples for a false `ensures` came with D32.
 
