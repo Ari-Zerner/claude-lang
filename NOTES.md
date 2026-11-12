@@ -708,6 +708,22 @@ design and its decisions (D1...).
   The harder tasks are in `trials/prove.py` as `--set hard`, not run on a model yet.
   **Lean 42/42, C 32/32 + 3 skipped.**
 
+- 2026-11-12 (night 8, step 6): **the harder set on Haiku: 5 of 7 first answers proved, 1 after a fix, and
+  the miss was clc's.** `results/2026-11-12-1500-prove-hard-haiku.md`. First answer proved: `bsearch`, `gcd`
+  (against `gcd_spec`), `factorial`, `reversed_list`, `max_index`. `is_sorted`: its first invariant (`i >= 1
+  and i <= n and ok == sorted_spec(xs, i)`) is false when the list is empty (the loop starts at i = 1 > n);
+  the message it got back was the generic one, and its second answer added `if n < 2 return true` and
+  proved. `digit_sum`: not proved in three answers, and the first was right: `while m > 0` with `invariant
+  m >= 0 and total + digits_spec(m) == digits_spec(n)`. Its last pass needs `m % 10 == m` and `m / 10 == 0`
+  below 10, and clc's proofs knew only `%`'s bounds. Added `clMod_v` to the prelude (`clMod a b m = if b = 0
+  then 0 else a % b`); replaying the run's first answers then proves 6 of 7
+  (`results/2026-11-12-1507-prove-replay-hard-haiku.md`). That loop is now in `tests/ok/proof-values.cl`.
+  My reference had dodged the gap by stopping at `m >= 10`: reference answers find the gaps my own
+  habits walk into, a model's answers find others. Seen but not acted on: in two fix rounds Haiku added
+  true but useless `invariant` lines, because the message can't say which of "start / kept / enough"
+  failed; that is item (iii).
+  **Lean 42/42, C 32/32 + 3 skipped.**
+
 ## Next step
 1. **Formal verification** (Ari, 2026-11-07: "we definitely want proofs, not just fuzzing"; see
    DESIGN.md open questions): contracts (`requires`/`ensures`), build-time counterexample search,
@@ -753,10 +769,11 @@ design and its decisions (D1...).
      and no test compiles from a long path (the cause is gone by construction, the check was by hand).
      (ii) **done (night 8 step 4)**: Haiku 7 of 7 on the first answer (`trials/prove.py`). The harder
      set's reference answers all prove (step 5) and are in `prove.py` as `--set hard` (binary search, gcd,
-     factorial, digit sum, reverse, max index, is_sorted). **Next: run it** (`python3 trials/prove.py --set
-     hard --model haiku`, then Sonnet if Haiku misses any). After that: a task where the model must write
+     factorial, digit sum, reverse, max index, is_sorted). **Run on Haiku (step 6): 6 of 7 first
+     answers prove once `%` was fixed.** Next for the trial: a task where the model must write
      the helper definition itself, and ones that sit on today's limits to see what the model does there
-     (`for x in xs`, a `break`, nested loops, a local from an earlier loop). Also worth a sentence in SPEC once a trial shows it's needed: a contract may call another
+     (`for x in xs`, a `break`, nested loops, a local from an earlier loop). **But (iii) comes first now:**
+     both trial misses went back with a message that couldn't say which part failed. Also worth a sentence in SPEC once a trial shows it's needed: a contract may call another
      function as the definition to agree with. (iii) which goal failed (entry / kept /
      enough): `trials/lean/goals.py` (`all_goals first | TAC | (mleave; trace_state; sorry)`) shows it
      for one theorem and could become a clc flag or a better `unproved` reason; then (c) and (d).

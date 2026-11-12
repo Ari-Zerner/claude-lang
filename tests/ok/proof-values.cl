@@ -88,6 +88,31 @@ fn quad(n: Int) -> Int
   return 4 * n
 end fn quad
 
+# what `%` is, not only its bounds: below 10, `m % 10` is `m` and `m / 10` is 0, which the last pass needs.
+# (This loop is Haiku's first answer in the night-8 trial; clc couldn't prove it until it knew that.)
+fn digits_spec(n: Int) -> Int
+  requires n >= 0
+  if n < 10
+    return n
+  end if
+  return n % 10 + digits_spec(n / 10)
+end fn digits_spec
+
+fn digit_sum(n: Int) -> Int
+  requires n >= 0
+  ensures result == digits_spec(n)
+  example digit_sum(1234) == 10
+  var m = n
+  var total = 0
+  while m > 0
+    invariant m >= 0 and total + digits_spec(m) == digits_spec(n)
+    decreases m
+    total = total + m % 10
+    m = m / 10
+  end while
+  return total
+end fn digit_sum
+
 fn main() uses io
   print(divide(a: 100, b: 7))
   print(find_index(xs: [1, 2, 3], want: 2))
@@ -95,4 +120,5 @@ fn main() uses io
   print(next_square(9))
   print(fib(30))
   print(quad(5))
+  print(digit_sum(98765))
 end fn main

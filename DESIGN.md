@@ -446,6 +446,11 @@ Claude differs from a human programmer in ways that matter for language design:
     through its own `ensures` (D31). With (1) to (4), an iterative `fib` is proved equal to the recursive
     `fib_spec` from `invariant a == fib_spec(i) and b == fib_spec(i + 1)`. Also `clDiv a b m = a / b` is a
     rule now (`/` really is Lean's, 0 for a zero divisor), in place of unfolding `clDiv`.
+    (5) **What `%` is, not only its bounds.** A proof knew `0 <= a % b < b` and nothing else, so it couldn't
+    use `m % 10 == m` below 10 or `m == 10 * (m / 10) + m % 10`. The rule `clMod a b m = if b = 0 then 0 else
+    a % b` gives `grind` Lean's `%` to reason with. This one a model found, not a reference answer: Haiku's
+    digit-sum loop (`while m > 0`, where mine stopped at `m >= 10` and so never needed it) was right and
+    went unproved through two fix rounds.
   - *Not yet:* call-site proofs of `requires` (D31), loops (`invariant`), a heartbeat limit for a slow
     `grind` (a timeout would be an error, not a `sorry`). Counterexamples for a false `ensures` came with D32.
 
@@ -583,7 +588,12 @@ Claude differs from a human programmer in ways that matter for language design:
     Haiku wrote loops with invariants that clc proved for 7 of 7 functions on its first answer (multiply
     by adding, divide by subtracting, count evens, find an index, and `fib`, `sum` and `power` each against a
     recursive definition). On the compiler as it was a day earlier the same answers proved 2 of 7: the
-    gaps were in the automation (D30's night-8 point), not in the invariants.
+    gaps were in the automation (D30's night-8 point), not in the invariants. A harder set (binary
+    search, gcd, factorial and digit sum against definitions, reversing a list, index of the largest
+    item, `is_sorted` against a definition): 5 of 7 on the first answer and `is_sorted` after one fix
+    (its invariant was false for an empty list, and Haiku found that from the generic message). The
+    seventh, digit sum, was a correct answer clc couldn't prove (D30 night-8 point, 5); with that fixed,
+    its first answer proves, so 6 of 7 first answers.
   - *Not yet decided or tried:* a run-time check of each invariant (wanted: then D32's search can show a
     false one with its input; it must not be an early `return`, which would change the loop's shape for the
     proof); a run-time check that `decreases` goes down, so an unproved loop can't hang; `break` (the state

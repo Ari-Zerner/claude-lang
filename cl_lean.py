@@ -56,10 +56,14 @@ it is the real place; `clAt 6 10` is a closed term, so it is computed once, not 
 /-- What termination proofs need about `%` (D28): gcd's `b.natAbs` goes down because `a % b` is below `|b|`. -/
 theorem clMod_bound (a b : Int) (m : String) (h : b ≠ 0) : 0 ≤ clMod a b m ∧ clMod a b m < b.natAbs := by
   simp only [clMod, beq_iff_eq, h, ite_false]; exact ⟨Int.emod_nonneg a h, Int.emod_lt a h⟩
-/-- To a proof `a / b` is Lean's own `/`: 0 when b is 0, which is also what a trap is worth. (`%` isn't Lean's:
-`a % 0` is `a` there. Two `a % b` written in different places are one term because their places are, `clAt_eq`.) -/
+/-- To a proof `a / b` is Lean's own `/`: 0 when b is 0, which is also what a trap is worth. `a % b` is Lean's
+`%` except for a zero divisor (Lean's `a % 0` is `a`; a trap is worth 0). Without `clMod_v` a proof knew only
+`%`'s bounds, not that `m % 10` is `m` below 10 or that `m` is `10 * (m / 10) + m % 10`. -/
 @[grind =] theorem clDiv_v (a b : Int) (m : String) : clDiv a b m = a / b := by
   simp only [clDiv, clTrap]; split <;> simp_all <;> rfl
+@[grind =] theorem clMod_v (a b : Int) (m : String) : clMod a b m = if b = 0 then 0 else a % b := by
+  unfold clMod clTrap
+  by_cases h : b = 0 <;> simp [h] <;> rfl
 
 /-- claude-lang's printed form of a value inside a list or struct: strings quoted with the language's own
 escapes, lists as `[1, 2]` (D18, D19). At the top of `print` and `{...}` a String prints as itself. -/
