@@ -58,17 +58,29 @@ def termination(f, tmp):
 
 
 def unproved_problems(f):
-    """In a program with `ensures` (D30), exactly the `ensures` lines ending in `# unproved` must be unproved."""
+    """In a program with `ensures` (D30), exactly the `ensures` lines ending in `# unproved` must be unproved.
+    `# unproved: some words` also wants those words in the reason clc gives."""
     src = open(f).read()
     if not re.search(r"^\s*ensures ", src, re.M) or (BACKEND and BACKEND[1] != "lean"):
         return None
-    want = [i + 1 for i, ln in enumerate(src.split("\n")) if re.match(r"\s*ensures .*#\s*unproved\s*$", ln)]
+    marks = {}
+    for i, ln in enumerate(src.split("\n")):
+        m = re.match(r"\s*ensures .*#\s*unproved(?::\s*(.*?))?\s*$", ln)
+        if m:
+            marks[i + 1] = m.group(1)
+    want = sorted(marks)
     r = subprocess.run([sys.executable, CLC, "test", "--json", f], capture_output=True, text=True)
     try:
-        got = sorted(d["line"] for d in json.loads(r.stderr or "[]") if d["code"] == "unproved")
+        said = {d["line"]: d["message"] for d in json.loads(r.stderr or "[]") if d["code"] == "unproved"}
     except json.JSONDecodeError:
         return f"`clc test --json` didn't give JSON: {r.stderr[:500]}"
-    return None if got == want else f"unproved `ensures` on lines {got}, expected {want}"
+    got = sorted(said)
+    if got != want:
+        return f"unproved `ensures` on lines {got}, expected {want}"
+    for line, words in marks.items():
+        if words and words not in said[line]:
+            return f"the reason for line {line} should mention {words!r}, but it is: {said[line]}"
+    return None
 
 
 import tempfile

@@ -620,6 +620,21 @@ design and its decisions (D1...).
   Lean 39/39, C 32/32 + 3 skipped. **Start next time at "Next, pick by value" below** (locals in
   invariants first, then a trial of whether models write invariants that prove).
 
+- 2026-11-12 (night 8, step 1): **fixed `let`s in loop proofs.** An `invariant` or `decreases` line, a `for`'s
+  range and a `while`'s condition may now use a `let` from before the loop whose value is made from the
+  parameters alone, maybe through other such `let`s (`let n = length(xs)`, the commonest limit left by
+  step 6). `cl_lean.py`: `lets_at_loops` (per loop, the `let`s in scope where it starts, so a name reused in
+  two branches means the right thing), and `loop_plan` puts `let v_n : T := <its definition>; ` at the front
+  of each term that needs it. No probe by hand was needed: `mvcgen` keeps the program's own `let` in the
+  goal and `grind` matches the two. A local that comes from a `var` or an earlier loop is still refused,
+  with a message naming it; so is a `while` whose condition uses one (before, that built a term Lean
+  rejected and the warning gave the generic reason). `tests/ok/invariant-locals.cl`: eight functions, six
+  proved (a local in a `for` invariant, a range from a chain of two locals, a local made by a call whose
+  `ensures` the proof needs, one name in two branches, a `return` in the loop, a `let` after an earlier
+  loop), two refused on purpose. `tests/run.py`: `# unproved: some words` now also checks the reason clc
+  gives (checked that it can fail). SPEC.md's sentence updated.
+  **Lean 40/40** (7 min for the full run on the loaded box, 2 min of CPU), **C 32/32 + 3 skipped.**
+
 ## Next step
 1. **Formal verification** (Ari, 2026-11-07: "we definitely want proofs, not just fuzzing"; see
    DESIGN.md open questions): contracts (`requires`/`ensures`), build-time counterexample search,
@@ -657,9 +672,10 @@ design and its decisions (D1...).
      (a) **front end: done (night 7 step 5)**, except the SPEC paragraph, which goes in with (b).
      (b) **proofs: done (night 7 step 6)** for loops that aren't nested, have no `break`, and whose lines
      mention only parameters and the loop's own variables.
-     **Next, pick by value:** locals in invariants (the commonest limit: `let n = length(xs)` before a loop;
-     maybe pass them as extra hypotheses, or inline their definitions); a trial: give Haiku/Sonnet the new
-     SPEC paragraph and five loop functions with `ensures`, and see whether the invariants they write prove;
+     Locals in invariants: **done for `let`s made from parameters (night 8 step 1)**; a local that comes
+     from a `var` or an earlier loop is still out (D33 says what it would need).
+     **Next, pick by value:** a trial: give Haiku/Sonnet the SPEC paragraph and five loop functions with
+     `ensures`, and see whether the invariants they write prove;
      which goal failed (entry / kept / enough), by closing each with its own axiom; then (c) and (d).
      (c) run-time checks: each `invariant` (not as an early `return`: try `v := clGuard ok msg v` on one state
      variable) and "`decreases` went down", so D32's search can show a false invariant with its input.

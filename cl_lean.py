@@ -504,6 +504,29 @@ def names_in(e):
     return [n.name for n in nodes_of(e, "name") if not getattr(n, "variant", None)]
 
 
+def lets_at_loops(stmts, seen=(), out=None):
+    """For each loop under these statements (by `id`), the `let` and `var` statements in scope where it starts,
+    in the order they were declared. Two branches may use one name for different things, so a loop's own
+    list, not the function's, says what a name means there."""
+    out = {} if out is None else out
+    seen = list(seen)
+    for s in stmts:
+        if s.kind == "let":
+            seen.append(s)
+        elif s.kind == "if":
+            for _, body in s.branches:
+                lets_at_loops(body, seen, out)
+            if s.else_body is not None:
+                lets_at_loops(s.else_body, seen, out)
+        elif s.kind == "match":
+            for arm in s.arms:
+                lets_at_loops(arm[1], seen, out)
+        elif s.kind in ("while", "for"):
+            out[id(s)] = list(seen)
+            lets_at_loops(s.body, seen, out)
+    return out
+
+
 class LeanEmitter:
     def __init__(self, fns, structs, path):
         self.fns, self.path = fns, path
@@ -859,6 +882,7 @@ class LeanEmitter:
             return None, f"fn {f.name} is recursive and has a loop, and clc can't prove that combination yet"
         lets = {n.name: n for n in nodes_of(f.body, "let")}
         order = [n for n in lets if lets[n].mutable]
+        scope = lets_at_loops(f.body)
         params = {n for n, _, _ in f.params}
         ens = contracts(f, "ensures")
         terms = []
@@ -878,18 +902,45 @@ class LeanEmitter:
             inner = {n.name for n in nodes_of(lp.body, "let")}
             state = [v for v in order if v in assigned_in(lp.body) and v not in inner]
             index = lp.var if lp.kind == "for" and lp.src is None else None
-            ok = params | set(state) | ({index} if index else set())
+            # A `let` before the loop whose value is made from the parameters alone (maybe through other such
+            # `let`s) means the same thing everywhere, so a term may use it: it restates the definition.
+            fixed = {}
+            for n in scope.get(id(lp), []):
+                if not n.mutable and n.name != "_" and all(m in params or m in fixed for m in names_in(n.expr)):
+                    fixed[n.name] = n
+            ok = params | set(state) | ({index} if index else set()) | set(fixed)
+            if lp.kind == "while":  # its condition is part of what the loop's end says
+                bad = [n for n in names_in(lp.cond) if n not in ok]
+                if bad:
+                    return None, (f"{word} tests `{bad[0]}`, a local variable that the loop doesn't change and "
+                                  f"that isn't a `let` made from the parameters alone, and so far clc can only "
+                                  f"prove a loop whose condition uses parameters, such `let`s and the variables "
+                                  f"the loop assigns")
             for h in invs + ([dec] if dec else []):
                 bad = [n for n in names_in(h.expr) if n not in ok]
                 if bad:
                     return None, (f"`{h.kind} {h.text}` (line {h.tok.line}) mentions `{bad[0]}`, a local variable "
-                                  f"the loop doesn't change, and so far clc can only use parameters and the "
-                                  f"variables the loop assigns there")
+                                  f"that the loop doesn't change and that isn't a `let` made from the parameters "
+                                  f"alone, and so far clc can only use parameters, such `let`s and the variables "
+                                  f"the loop assigns there")
             if lp.kind == "for":
-                bad = [n for e in (lp.src, lp.lo, lp.hi) if e is not None for n in names_in(e) if n not in params]
+                bad = [n for e in (lp.src, lp.lo, lp.hi) if e is not None for n in names_in(e)
+                       if n not in params and n not in fixed]
                 if bad:
-                    return None, (f"{word} runs over something made from a local variable (`{bad[0]}`), and so "
-                                  f"far clc can only prove a loop over a range or list made from parameters")
+                    return None, (f"{word} runs over something made from `{bad[0]}`, a local variable that isn't "
+                                  f"a `let` made from the parameters alone, and so far clc can only prove a loop "
+                                  f"over a range or list made from parameters and such `let`s")
+            # The definitions the terms need, in declaration order (a `let` may be made from earlier ones).
+            need = {n for h in invs + ([dec] if dec else []) for n in names_in(h.expr) if n in fixed}
+            if index:
+                need |= {n for n in names_in(lp.lo) if n in fixed}
+            if lp.kind == "while":
+                need |= {n for n in names_in(lp.cond) if n in fixed}
+            for name in reversed(list(fixed)):
+                if name in need:
+                    need |= {n for n in names_in(fixed[name].expr) if n in fixed}
+            pre = "".join(f"let v_{n} : {ltype(d.var_ty, n)} := {self.expr(d.expr)}; "
+                          for n, d in fixed.items() if n in need)
 
             def bind(tup):
                 """`let v_a := tup.1; let v_b := tup.2; `: the loop's variables out of its state."""
@@ -906,17 +957,17 @@ class LeanEmitter:
             if lp.kind == "while":
                 st, ret = ("cl_s.2", "cl_s.1") if returns else ("cl_s", None)
                 cond = self.expr(lp.cond)
-                during = f"{bind(st)}({inv}) = true"
-                after = f"{bind(st)}({inv}) = true ∧ ¬ ({cond}) = true"
+                during = f"{pre}{bind(st)}({inv}) = true"
+                after = f"{pre}{bind(st)}({inv}) = true ∧ ¬ ({cond}) = true"
                 if returns:
                     during = f"(∀ cl_v, {ret} = some cl_v → {ensured}) ∧ ({ret} = none → {during})"
                     after = f"(∀ cl_v, {ret} = some cl_v → {ensured}) ∧ ({ret} = none → {after})"
-                terms.append(f"fun cl_s => {bind(st)}⟨({self.expr(dec.expr)}).toNat⟩")
+                terms.append(f"fun cl_s => {pre}{bind(st)}⟨({self.expr(dec.expr)}).toNat⟩")
                 terms.append(f"⇓ cl_x => match cl_x with | .inl cl_s => ⌜{during}⌝ | .inr cl_s => ⌜{after}⌝")
             else:
                 st, ret = ("cl_x.2.2", "cl_x.2.1") if returns else ("cl_x.2", None)
                 at = f"let v_{index} : Int := {self.expr(lp.lo)} + cl_x.1.prefix.length; " if index else ""
-                during = f"{at}{bind(st)}({inv}) = true"
+                during = f"{pre}{at}{bind(st)}({inv}) = true"
                 if returns:
                     during = f"(∀ cl_v, {ret} = some cl_v → {ensured}) ∧ ({ret} = none → {during})"
                 terms.append(f"⇓ cl_x => ⌜{during}⌝")

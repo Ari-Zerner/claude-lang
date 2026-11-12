@@ -223,9 +223,10 @@ end fn name
   negative there and gets smaller on every pass, which is why the loop stops. A `for` needs no
   `decreases`. In `for i in a until b`, `i` in an invariant is the next index (`b` once the loop is
   over); `for x in xs` can't name `x` in one, so loop over an index to say something about the
-  items seen so far. These lines may use the function's parameters and the variables the loop
-  assigns. A loop with no `invariant` still runs; the `ensures` after it is just less likely to be
-  proved, and the `unproved` warning says which loop and what it lacks.
+  items seen so far. These lines may use the function's parameters, the variables the loop
+  assigns, and a `let` from before the loop whose value is made from the parameters alone
+  (`let n = length(xs)`). A loop with no `invariant` still runs; the `ensures` after it is just
+  less likely to be proved, and the `unproved` warning says which loop and what it lacks.
 
 ## Calls
 

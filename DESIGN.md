@@ -527,13 +527,24 @@ Claude differs from a human programmer in ways that matter for language design:
   - *What's built (`loop_plan` in `cl_lean.py`):* a function with loops gets the `mvcgen` script instead of
     D30's `unfold; grind` when every loop is one clc can state: not nested, no `break`, not `reversed`, a
     `decreases` on each `while`, a range or list made from parameters, and `invariant`/`decreases` lines
-    that mention only parameters and the variables the loop assigns (a goal's context holds nothing else).
+    that mention only parameters, the variables the loop assigns, and fixed `let`s (next point).
     Otherwise the `unproved` warning names the loop and the obstacle (`the while on line 96 has no
     decreases line, so clc can't show that it stops`). When the script runs and fails, it says the
     invariant may not hold at the start, may not be kept, or may not be enough; and when a loop has no
     `invariant` at all, it says that instead. First results: isqrt, triangle numbers, gcd, a counting loop
     over a list and a search loop with a `return` inside are proved in the tests; a loop whose invariant
     is true but not kept by a pass (`c <= length(xs)`, counting matches) correctly stays unproved.
+  - *Fixed `let`s (2026-11-12, night 8):* where `mvcgen` asks for an invariant, only the theorem's own
+    variables (the parameters) are in scope, so a term can't name a local. But a `let` from before the
+    loop whose value is made from the parameters alone, maybe through other such `let`s, means the same
+    thing everywhere in the function, so clc restates it at the front of each term that needs it (`let v_n
+    : Int := Int.ofNat v_xs.size; ...`) and `grind` sees the same expression on both sides. That covers
+    `let n = length(xs)` before a loop, the commonest case, in `invariant` and `decreases` lines, a `for`'s
+    range and a `while`'s condition. Which `let` a name means is read from the loop's own scope, since two
+    branches may each have a `let goal`. A wrong restatement could only make a proof fail. Still out: a
+    local that depends on a `var` or on an earlier loop's result (`let m = t` after a loop that counts
+    `t`); the warning names the variable and says why. That one needs the invariant to be stated where the
+    earlier loop's final state is in scope, which `mvcgen`'s `inv` goals don't offer.
   - *Not yet decided or tried:* a run-time check of each invariant (wanted: then D32's search can show a
     false one with its input; it must not be an early `return`, which would change the loop's shape for the
     proof); a run-time check that `decreases` goes down, so an unproved loop can't hang; `break` (the state
