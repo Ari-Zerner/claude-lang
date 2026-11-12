@@ -1,0 +1,31 @@
+#!/usr/bin/env python3
+"""Which goals does a loop proof leave open?
+
+  python3 clc.py build --emit-lean -o /tmp/x/prog prog.cl
+  python3 trials/lean/goals.py /tmp/x/prog.lean FN [TACTIC] > /tmp/x/goals.lean
+  lean /tmp/x/goals.lean
+
+Writes a Lean file with the program and fn FN's first `ensures` theorem alone, its `mvcgen` script (D33)
+changed so that every goal the closing tactic can't close is printed (and then given up with `sorry`)
+instead of the whole theorem falling back to its axiom. TACTIC, when given, replaces the closing tactic.
+Other functions' `ensures` theorems are left out, so a proof that needs a callee's fact will show that goal.
+Found night 8's two prover gaps (NOTES, night 8 step 2)."""
+import re
+import sys
+
+src = open(sys.argv[1]).read()
+fn = sys.argv[2]
+head = src[:src.index("\n-- fn ")]  # the prelude and the program, up to the first theorem
+m = re.search(rf"\ntheorem clSpec_{fn}_0 (.*?)\n  first\n  \| \((.*?)\n  \| exact clUnproved", src, re.S)
+if not m:
+    sys.exit(f"no loop theorem for fn {fn} in {sys.argv[1]}")
+stmt, script = m.group(1), m.group(2)
+lines = script.split("\n")
+closing = lines[-1].strip()
+if not closing.startswith("all_goals "):
+    sys.exit(f"fn {fn}'s proof isn't an `mvcgen` script (no loop?)")
+tac = sys.argv[3] if len(sys.argv) > 3 else closing[len("all_goals "):-1]  # drop the script's final ")"
+lines[-1] = f"all_goals first | {tac} | (mleave; trace_state; sorry)"
+print(head)
+print(f"theorem clSpec_{fn}_0 {stmt}")
+print("\n".join("  " + ln.strip() for ln in lines))

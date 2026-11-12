@@ -635,6 +635,25 @@ design and its decisions (D1...).
   gives (checked that it can fail). SPEC.md's sentence updated.
   **Lean 40/40** (7 min for the full run on the loaded box, 2 min of CPU), **C 32/32 + 3 skipped.**
 
+- 2026-11-12 (night 8, step 2): **set out to run the invariant trial; the reference answers found two prover
+  gaps first.** Before asking a model, I wrote my own answers for six loop functions with correct invariants.
+  Three didn't prove: division by subtraction (`ensures result * b <= a and a < (result + 1) * b`), a search
+  whose `ensures` says `xs[result] == want`, and an iterative `fib` against a recursive `fib_spec`. A trial
+  on that prover would have measured clc, not the model. Causes, each seen in the goal Lean was left with
+  (`trials/lean/goals.py`: rewrites a theorem's script so every goal the tactic can't close is printed):
+  (1) `grind` doesn't split an `and` known to be false, so the exit check `not (a and b)` told it nothing;
+  fixed with `Bool.and_eq_false_iff` in the hints (`GRIND_HINTS`, now shared by D30's and D33's tactics).
+  (2) `xs[i]`, `a % b`, `a / b` carry their source place for the trap message, so the same value written in
+  two places was two terms; fixed in the prelude with `clGet_v`, `clMod_v`, `clDiv_v` (`@[grind =]`), and
+  `clDiv` is no longer unfolded. `tests/ok/proof-values.cl`: four functions, all proved now; with the
+  previous compiler three of them weren't (checked by running the last commit's `clc.py` from a copy).
+  (3) Not fixed yet: a call to a function with `requires` carries its place too, and a loop proved equal
+  to a recursive function needs that function unfolded. That is `fib` vs `fib_spec`, the next step.
+  Slip to remember: I stashed `cl_lean.py` for a moment while the suite was running in the background;
+  the tests import it fresh each time, so that run was thrown away and repeated. Compare against an old
+  compiler from a copy (`git show HEAD:cl_lean.py > elsewhere`), never by changing the tree mid-run.
+  **Lean 41/41, C 32/32 + 3 skipped.**
+
 ## Next step
 1. **Formal verification** (Ari, 2026-11-07: "we definitely want proofs, not just fuzzing"; see
    DESIGN.md open questions): contracts (`requires`/`ensures`), build-time counterexample search,
@@ -674,9 +693,15 @@ design and its decisions (D1...).
      mention only parameters and the loop's own variables.
      Locals in invariants: **done for `let`s made from parameters (night 8 step 1)**; a local that comes
      from a `var` or an earlier loop is still out (D33 says what it would need).
-     **Next, pick by value:** a trial: give Haiku/Sonnet the SPEC paragraph and five loop functions with
-     `ensures`, and see whether the invariants they write prove;
-     which goal failed (entry / kept / enough), by closing each with its own axiom; then (c) and (d).
+     **Next, in order:** (i) calls to functions with `requires` as one term wherever written (a per-function
+     lemma `f_g loc x = f_g "" x`, or keep `cl_loc` out of the theorem's view), then the spec function's
+     definition as a `grind` hint, so `fib` proves against `fib_spec` (night 8 step 2 has the case; the
+     reference answers are in that step's notes and `tests/ok/proof-values.cl`); (ii) the trial: give
+     Haiku/Sonnet the SPEC paragraph and five loop functions with `ensures` (mul by adding, divide by
+     subtracting, count evens with an index loop, find_index, fib vs fib_spec), each with a reference answer
+     that proves, and see whether the invariants they write prove; (iii) which goal failed (entry / kept /
+     enough): `trials/lean/goals.py` (`all_goals first | TAC | (mleave; trace_state; sorry)`) shows it
+     for one theorem and could become a clc flag or a better `unproved` reason; then (c) and (d).
      (c) run-time checks: each `invariant` (not as an early `return`: try `v := clGuard ok msg v` on one state
      variable) and "`decreases` went down", so D32's search can show a false invariant with its input.
      (d) `break`, nested loops (find out how `inv1..invN` are numbered), `for x in xs`, `reversed`.

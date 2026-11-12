@@ -46,6 +46,13 @@ def clTrap {α : Type} [Inhabited α] (msg : String) : α := default
 /-- What termination proofs need about `%` (D28): gcd's `b.natAbs` goes down because `a % b` is below `|b|`. -/
 theorem clMod_bound (a b : Int) (m : String) (h : b ≠ 0) : 0 ≤ clMod a b m ∧ clMod a b m < b.natAbs := by
   simp only [clMod, beq_iff_eq, h, ite_false]; exact ⟨Int.emod_nonneg a h, Int.emod_lt a h⟩
+/-- To a proof, `a / b` and `a % b` are worth the same wherever they are written: the message a trap would print
+isn't part of the value. Without these, `a % b` in an `ensures` and `a % b` in the body are two different terms
+to `grind`. `/` is Lean's own (0 when b is 0, which is also what a trap is worth); `%` isn't (`a % 0` is `a`). -/
+def clModV (a b : Int) : Int := clMod a b ""
+@[grind =] theorem clMod_v (a b : Int) (m : String) : clMod a b m = clModV a b := by simp only [clModV, clMod, clTrap]
+@[grind =] theorem clDiv_v (a b : Int) (m : String) : clDiv a b m = a / b := by
+  simp only [clDiv, clTrap]; split <;> simp_all <;> rfl
 
 /-- claude-lang's printed form of a value inside a list or struct: strings quoted with the language's own
 escapes, lists as `[1, 2]` (D18, D19). At the top of `print` and `{...}` a String prints as itself. -/
@@ -85,6 +92,10 @@ def clIndexMsg (loc : String) (i : Int) (n : Nat) : String :=
 /-- `xs[i]`, stopping the program when i is out of range. -/
 @[inline] def clGet {α : Type} [Inhabited α] (xs : Array α) (i : Int) (loc : String) : α :=
   if h : 0 ≤ i ∧ i.toNat < xs.size then xs[i.toNat]'h.2 else clTrap (clIndexMsg loc i xs.size)
+/-- `xs[i]` is worth the same to a proof wherever it is written (as `clMod_v`). -/
+def clGetV {α : Type} [Inhabited α] (xs : Array α) (i : Int) : α := clGet xs i ""
+@[grind =] theorem clGet_v {α : Type} [Inhabited α] (xs : Array α) (i : Int) (loc : String) :
+    clGet xs i loc = clGetV xs i := by simp only [clGetV, clGet, clTrap]
 /-- `xs[i] = v`; in place when xs isn't shared, which is Lean's own refcounting (D19). -/
 @[inline] def clSet {α : Type} (xs : Array α) (i : Int) (v : α) (loc : String) : Array α :=
   if h : 0 ≤ i ∧ i.toNat < xs.size then xs.set i.toNat v h.2 else clTrap (clIndexMsg loc i xs.size)
@@ -482,9 +493,15 @@ theorem clMod_pos (a b : Int) (m : String) (h : 0 < b) : 0 ≤ clMod a b m ∧ c
 grind_pattern clMod_pos => clMod a b m
 """
 
+# What every contract proof hands `grind` (D30, D33): `%`'s bound, and a case split it doesn't make
+# by itself: an `and` that is false has a false side. Without that, the check `not (a and b)` on a function's
+# way out says nothing about `a` or `b`, and a two-part `ensures` is only proved when each part is, letter for
+# letter, something already known.
+GRIND_HINTS = "[clMod_bound, Bool.and_eq_false_iff]"
+
 # The one tactic that closes every goal `mvcgen` leaves (D33): drop the trap messages and the list lengths, then grind.
 LOOP_TACTIC = ("(mleave; (try simp only [clTrap, List.length_append, List.length_cons, List.length_nil, "
-               "Int.length_toList_rcc, Int.length_toList_rco] at *); grind [clMod_bound, clDiv])")
+               f"Int.length_toList_rcc, Int.length_toList_rco] at *); grind {GRIND_HINTS})")
 
 
 def assigned_in(stmts):
@@ -1005,7 +1022,7 @@ class LeanEmitter:
                     self.specs += [(f, c, None, why) for c in ens]
                     continue
                 # Callees' `ensures` reach grind through `grind_pattern` (below), which fires on any call.
-                hints = "[clMod_bound, clDiv]"
+                hints = GRIND_HINTS
                 reqs = contracts(f, "requires")
                 names = (["cl_loc"] if reqs else []) + [f"v_{n}" for n, _, _ in f.params]
                 binders = (["(cl_loc : String)"] if reqs else []) + [

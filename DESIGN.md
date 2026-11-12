@@ -418,6 +418,21 @@ Claude differs from a human programmer in ways that matter for language design:
     the `ensures` line, with the reason: a `while`/`for` loop (not provable yet), a function D28 left
     `partial`, io, or "the automation didn't find a proof" (which includes a false `ensures` that no example
     reaches, like `wrong_abs` returning `x` for `x < -5`). `clc test` ends with "N of M `ensures` proved".
+  - *Two things the automation needed, found by writing reference answers for a proof trial (2026-11-12,
+    night 8): three of five correct answers didn't prove, and the invariants weren't at fault.*
+    (1) **A value written twice must be one term.** `xs[i]`, `a / b` and `a % b` compile to helpers that
+    carry the place they were written, for the trap's message, so `xs[i]` in the body and `xs[result]` in
+    the `ensures` were different terms to `grind`, and so was `a % b` in two places. The message is no
+    part of the value (a trap is `default` to the kernel), so the prelude says so once, as rewrite rules
+    `grind` always has: `clGet xs i loc = clGetV xs i`, `clMod a b m = clModV a b`, `clDiv a b m = a / b`
+    (`/` really is Lean's, which is 0 for a zero divisor; `%` isn't, since Lean's `a % 0` is `a`). `clDiv` is
+    no longer unfolded as a hint. (2) **`grind` doesn't split an `and` that is false.** The check on a
+    function's way out is `not (a and b)`, and from that alone `grind` learned nothing about `a` or `b`, so
+    a two-part `ensures` was proved only when each part was already known letter for letter (isqrt's is,
+    which is why it passed). One library lemma in the hints, `Bool.and_eq_false_iff`, makes the split.
+    Still open from the same exercise: a call to a function with a `requires` also carries its place
+    (`f_g "file:line" x`), so `fib_spec(i)` in an invariant and `fib_spec(n)` in the `ensures` don't meet;
+    and proving a loop equal to a recursive function needs that function's definition unfolded.
   - *Not yet:* call-site proofs of `requires` (D31), loops (`invariant`), a heartbeat limit for a slow
     `grind` (a timeout would be an error, not a `sorry`). Counterexamples for a false `ensures` came with D32.
 
