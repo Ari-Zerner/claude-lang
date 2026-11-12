@@ -691,6 +691,23 @@ design and its decisions (D1...).
   the way, and the reference answers found that before any model was asked. Sonnet not run: nothing here
   separates models. The set is too easy to show where the limits are.
 
+- 2026-11-12 (night 8, step 5): **a harder set of reference answers: six of seven proved at once, binary
+  search found a bug in what clc writes for a loop with a `return`.** Proved as written: `gcd` by a loop
+  against a recursive `gcd_spec` (invariant `gcd_spec(x, y) == gcd_spec(a, b)`), `factorial` and `digit_sum`
+  against their definitions, reversing a list (`invariant length(out) == i`), `max_index`, and `is_sorted`
+  against `sorted_spec(xs, n)` when written with a flag (with an early `return false` it can't be proved
+  by unfolding: "not sorted up to i" has to climb to "not sorted up to length", which is an induction).
+  Binary search didn't: a `while` with a `return` and an invariant the next pass needs. Cause
+  (`trials/lean/goals.py`, then `grind`'s own report): the invariant clc wrote said "if a value was
+  returned, the `ensures` holds for it; if none was, the invariant holds", and a pass starts knowing only
+  that, so it could never use the invariant. Fix in `loop_plan`: during a `while`, "none returned and the
+  invariant"; for a `for`, "none returned or nothing left to visit" in front (the first wording,
+  "returned implies nothing left", left `grind` a case split on the `Option` that it doesn't make).
+  `tests/ok/loop-returns.cl`: `bsearch` and `capped_sum` (a `for` whose returned value is right only
+  because of the invariant), both proved now, neither before.
+  The harder tasks are in `trials/prove.py` as `--set hard`, not run on a model yet.
+  **Lean 42/42, C 32/32 + 3 skipped.**
+
 ## Next step
 1. **Formal verification** (Ari, 2026-11-07: "we definitely want proofs, not just fuzzing"; see
    DESIGN.md open questions): contracts (`requires`/`ensures`), build-time counterexample search,
@@ -734,13 +751,12 @@ design and its decisions (D1...).
      Open from it: a `grind` that runs out of heartbeats is still a Lean error, and unfolding recursive
      functions makes that likelier, so item (4) below (a cap that falls back to the axiom) has moved up;
      and no test compiles from a long path (the cause is gone by construction, the check was by hand).
-     (ii) **done (night 8 step 4)**: Haiku 7 of 7 on the first answer (`trials/prove.py`). Next for the
-     trial, a harder set, each task with a reference answer first (that is what finds prover gaps):
-     binary search (`while lo < hi`, `decreases hi - lo`), gcd by a loop against a recursive `gcd_spec`,
-     factorial and digit sum against their definitions, reversing a list (`length(result) == length(xs)`),
-     a task where the model must write the helper definition itself, and ones that sit on today's limits
-     to see what the model does there (`for x in xs`, a `break`, nested loops, a local from an earlier
-     loop). Also worth a sentence in SPEC once a trial shows it's needed: a contract may call another
+     (ii) **done (night 8 step 4)**: Haiku 7 of 7 on the first answer (`trials/prove.py`). The harder
+     set's reference answers all prove (step 5) and are in `prove.py` as `--set hard` (binary search, gcd,
+     factorial, digit sum, reverse, max index, is_sorted). **Next: run it** (`python3 trials/prove.py --set
+     hard --model haiku`, then Sonnet if Haiku misses any). After that: a task where the model must write
+     the helper definition itself, and ones that sit on today's limits to see what the model does there
+     (`for x in xs`, a `break`, nested loops, a local from an earlier loop). Also worth a sentence in SPEC once a trial shows it's needed: a contract may call another
      function as the definition to agree with. (iii) which goal failed (entry / kept /
      enough): `trials/lean/goals.py` (`all_goals first | TAC | (mleave; trace_state; sorry)`) shows it
      for one theorem and could become a clc flag or a better `unproved` reason; then (c) and (d).

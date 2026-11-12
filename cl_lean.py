@@ -988,7 +988,9 @@ class LeanEmitter:
                 during = f"{pre}{bind(st)}({inv}) = true"
                 after = f"{pre}{bind(st)}({inv}) = true ∧ ¬ ({cond}) = true"
                 if returns:
-                    during = f"(∀ cl_v, {ret} = some cl_v → {ensured}) ∧ ({ret} = none → {during})"
+                    # While the loop runs nothing has been returned yet, and a pass may count on that: without
+                    # it the invariant, which only speaks when nothing was returned, is no use to the next pass.
+                    during = f"{ret} = none ∧ ({during})"
                     after = f"(∀ cl_v, {ret} = some cl_v → {ensured}) ∧ ({ret} = none → {after})"
                 terms.append(f"fun cl_s => {pre}{bind(st)}⟨({self.expr(dec.expr)}).toNat⟩")
                 terms.append(f"⇓ cl_x => match cl_x with | .inl cl_s => ⌜{during}⌝ | .inr cl_s => ⌜{after}⌝")
@@ -997,7 +999,11 @@ class LeanEmitter:
                 at = f"let v_{index} : Int := {self.expr(lp.lo)} + cl_x.1.prefix.length; " if index else ""
                 during = f"{pre}{at}{bind(st)}({inv}) = true"
                 if returns:
-                    during = f"(∀ cl_v, {ret} = some cl_v → {ensured}) ∧ ({ret} = none → {during})"
+                    # A `return` ends the loop, so a value has been returned only when nothing is left to visit;
+                    # saying so lets a pass (which has an item in hand) know that nothing was returned before it,
+                    # and so that the invariant held. As an `or`, so `grind` needn't take the Option apart.
+                    during = (f"({ret} = none ∨ cl_x.1.suffix = []) ∧ (∀ cl_v, {ret} = some cl_v → {ensured}) ∧ "
+                              f"({ret} = none → {during})")
                 terms.append(f"⇓ cl_x => ⌜{during}⌝")
         bare = [lp for lp in loops if not getattr(lp, "invariants", [])]
         if bare:

@@ -533,7 +533,13 @@ Claude differs from a human programmer in ways that matter for language design:
     an unknown. `while`: a variant `fun s => (decreases).toNat` and an invariant with two cases, during
     (the invariant) and after (the invariant and not the condition). Range `for`: one invariant over a
     cursor into the range's list, with `i := start + prefix.length`. A `return` inside a loop adds an
-    `Option` to the state, and the invariant adds "the `ensures` holds for the value returned".
+    `Option` to the state, and the invariant adds "the `ensures` holds for the value returned". It also
+    has to say that **while the loop runs, nothing has been returned yet** (night 8): for a `while`, "none
+    returned, and the invariant" during and the two-case form only after; for a `for`, "none returned, or
+    nothing is left to visit" (as an `or`: with "returned implies nothing left", `grind` would have had to
+    take the `Option` apart, and doesn't). Without that a pass couldn't use the invariant from the pass
+    before, since the invariant only speaks when nothing was returned. The night-7 probe missed it because
+    its one loop with a `return` needed no invariant. Binary search found it.
   - *What it needed:* two lemmas about a range's list (the item after a prefix is the start plus the
     prefix's length, and lies inside the range) with explicit `grind_pattern`s; `clMod_pos` (`0 <= a % b <
     b` for `b > 0`); unfolding `clTrap` before `grind`, so the long messages are gone. `import

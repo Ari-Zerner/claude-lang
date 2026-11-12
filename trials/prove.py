@@ -11,7 +11,7 @@ what the hidden `main` expects, and clc reports no `unproved` warning. An answer
 trials/results/<run>.md.
 
   python3 trials/prove.py --reference            # the reference answers: every task must come out proved
-  python3 trials/prove.py [--model haiku] [--only NAME ...]
+  python3 trials/prove.py [--model haiku] [--set first|hard] [--only NAME ...]
   python3 trials/prove.py --replay trials/results/RUN.md [--clc OTHER/clc.py]
       # grade again the first answer each task got in an earlier run, without calling a model: do past
       # answers still prove, or (with an older compiler) what would that run have shown before a change?
@@ -120,6 +120,102 @@ TASKS = [
          reference="  var r = 1\n  for i in 0 until e\n    invariant r == pow_spec(b: b, e: i)\n    r = r * b\n"
                    "  end for\n  return r\n"),
 ]
+
+# A harder set (night 8 step 5): a `while` with a `return`, loops against recursive definitions that need more
+# than restating the loop, a list built in the loop, and a check that can't be proved with an early `return`.
+HARD = [
+    dict(name="bsearch",
+         task="Binary search: `xs` is sorted in increasing order; return an index where `want` is, or -1 when "
+              "it isn't there. Halve the range each pass; don't scan the list item by item.",
+         helper="",
+         header="fn bsearch(xs: List[Int], want: Int) -> Int\n"
+                "  ensures result == -1 or (result >= 0 and result < length(xs) and xs[result] == want)\n"
+                "  example bsearch(xs: [1, 3, 5, 7], want: 5) == 2\n"
+                "  example bsearch(xs: [1, 3, 5, 7], want: 4) == -1\n",
+         banned=[],
+         main="  print(bsearch(xs: [2, 4, 6, 8, 10], want: 8))\n  print(bsearch(xs: [2, 4, 6, 8, 10], want: 5))\n"
+              "  print(bsearch(xs: [], want: 1))\n  print(bsearch(xs: [7], want: 7))\n",
+         want="3\n-1\n-1\n0\n",
+         reference="  var lo = 0\n  var hi = length(xs)\n  while lo < hi\n"
+                   "    invariant lo >= 0 and hi <= length(xs)\n    decreases hi - lo\n"
+                   "    let mid = (lo + hi) / 2\n    if xs[mid] == want\n      return mid\n    end if\n"
+                   "    if xs[mid] < want\n      lo = mid + 1\n    else\n      hi = mid\n    end if\n"
+                   "  end while\n  return -1\n"),
+    dict(name="gcd",
+         task="Greatest common divisor by Euclid's method, with a loop. `gcd_spec` below is the definition it "
+              "must agree with.",
+         helper="fn gcd_spec(a: Int, b: Int) -> Int\n  requires a >= 0 and b >= 0\n  if b == 0\n    return a\n"
+                "  end if\n  return gcd_spec(a: b, b: a % b)\nend fn gcd_spec\n",
+         header="fn gcd(a: Int, b: Int) -> Int\n  requires a >= 0 and b >= 0\n"
+                "  ensures result == gcd_spec(a: a, b: b)\n  example gcd(a: 48, b: 36) == 12\n",
+         banned=["gcd_spec"],
+         main="  print(gcd(a: 12, b: 18))\n  print(gcd(a: 7, b: 0))\n  print(gcd(a: 0, b: 0))\n"
+              "  print(gcd(a: 35, b: 64))\n",
+         want="6\n7\n0\n1\n",
+         reference="  var x = a\n  var y = b\n  while y != 0\n"
+                   "    invariant x >= 0 and y >= 0 and gcd_spec(a: x, b: y) == gcd_spec(a: a, b: b)\n"
+                   "    decreases y\n    let t = x % y\n    x = y\n    y = t\n  end while\n  return x\n"),
+    dict(name="factorial",
+         task="n factorial, with a loop. `fact_spec` below is the definition it must agree with.",
+         helper="fn fact_spec(n: Int) -> Int\n  requires n >= 0\n  if n == 0\n    return 1\n  end if\n"
+                "  return n * fact_spec(n - 1)\nend fn fact_spec\n",
+         header="fn factorial(n: Int) -> Int\n  requires n >= 0\n  ensures result == fact_spec(n)\n"
+                "  example factorial(5) == 120\n",
+         banned=["fact_spec"],
+         main="  print(factorial(6))\n  print(factorial(0))\n  print(factorial(1))\n",
+         want="720\n1\n1\n",
+         reference="  var r = 1\n  for i in 1 through n\n    invariant r == fact_spec(i - 1)\n    r = r * i\n"
+                   "  end for\n  return r\n"),
+    dict(name="digit_sum",
+         task="The sum of the decimal digits of n, with a loop. `digits_spec` below is the definition it must "
+              "agree with.",
+         helper="fn digits_spec(n: Int) -> Int\n  requires n >= 0\n  if n < 10\n    return n\n  end if\n"
+                "  return n % 10 + digits_spec(n / 10)\nend fn digits_spec\n",
+         header="fn digit_sum(n: Int) -> Int\n  requires n >= 0\n  ensures result == digits_spec(n)\n"
+                "  example digit_sum(1234) == 10\n",
+         banned=["digits_spec"],
+         main="  print(digit_sum(98765))\n  print(digit_sum(0))\n  print(digit_sum(7))\n  print(digit_sum(1000))\n",
+         want="35\n0\n7\n1\n",
+         reference="  var k = n\n  var s = 0\n  while k >= 10\n"
+                   "    invariant k >= 0 and s + digits_spec(k) == digits_spec(n)\n    decreases k\n"
+                   "    s = s + k % 10\n    k = k / 10\n  end while\n  return s + k\n"),
+    dict(name="reversed_list",
+         task="Return the items of the list in the opposite order.",
+         helper="",
+         header="fn reversed_list(xs: List[Int]) -> List[Int]\n  ensures length(result) == length(xs)\n"
+                "  example reversed_list([1, 2, 3]) == [3, 2, 1]\n",
+         banned=[],
+         main="  print(reversed_list([1, 2, 3, 4]))\n  print(reversed_list([]))\n  print(reversed_list([9]))\n",
+         want="[4, 3, 2, 1]\n[]\n[9]\n",
+         reference="  var out: List[Int] = []\n  for i in 0 until length(xs)\n    invariant length(out) == i\n"
+                   "    out = append(list: out, item: xs[length(xs) - 1 - i])\n  end for\n  return out\n"),
+    dict(name="max_index",
+         task="Return the index of the largest item (the first one, if it appears more than once).",
+         helper="",
+         header="fn max_index(xs: List[Int]) -> Int\n  requires length(xs) > 0\n"
+                "  ensures result >= 0 and result < length(xs)\n  example max_index([3, 9, 2]) == 1\n",
+         banned=[],
+         main="  print(max_index([5, 1, 7, 7]))\n  print(max_index([4]))\n  print(max_index([-3, -1, -2]))\n",
+         want="2\n0\n1\n",
+         reference="  var best = 0\n  for i in 1 until length(xs)\n    invariant best >= 0 and best < length(xs)\n"
+                   "    if xs[i] > xs[best]\n      best = i\n    end if\n  end for\n  return best\n"),
+    dict(name="is_sorted",
+         task="Is the list in non-decreasing order? `sorted_spec(xs, n)` below, which says whether the first n "
+              "items are, is the definition it must agree with.",
+         helper="fn sorted_spec(xs: List[Int], n: Int) -> Bool\n  requires n >= 0 and n <= length(xs)\n"
+                "  if n < 2\n    return true\n  end if\n"
+                "  return sorted_spec(xs: xs, n: n - 1) and xs[n - 2] <= xs[n - 1]\nend fn sorted_spec\n",
+         header="fn is_sorted(xs: List[Int]) -> Bool\n  ensures result == sorted_spec(xs: xs, n: length(xs))\n"
+                "  example is_sorted([1, 2, 2, 5]) == true\n  example is_sorted([1, 3, 2]) == false\n",
+         banned=["sorted_spec"],
+         main="  print(is_sorted([1, 2, 3]))\n  print(is_sorted([3, 1, 2]))\n  print(is_sorted([]))\n"
+              "  print(is_sorted([4]))\n  print(is_sorted([1, 2, 1, 5]))\n",
+         want="true\nfalse\ntrue\ntrue\nfalse\n",
+         reference="  if length(xs) < 2\n    return true\n  end if\n  var ok = true\n"
+                   "  for i in 1 until length(xs)\n    invariant ok == sorted_spec(xs: xs, n: i)\n"
+                   "    if xs[i - 1] > xs[i]\n      ok = false\n    end if\n  end for\n  return ok\n"),
+]
+SETS = {"first": TASKS, "hard": HARD}
 
 PROMPT = """Below is the complete specification of a new programming language, claude-lang.
 You have never seen it before; rely only on this spec.
@@ -260,6 +356,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", default="haiku")
     ap.add_argument("--only", nargs="*")
+    ap.add_argument("--set", choices=sorted(SETS), default="first")
     ap.add_argument("--reference", action="store_true", help="grade the reference answers; no model is called")
     ap.add_argument("--replay", metavar="RESULTS.md", help="grade an earlier run's first answers again")
     ap.add_argument("--clc", help="the compiler to grade with (default: this repo's clc.py)")
@@ -275,11 +372,12 @@ def main():
             print(f"grading with {CLC}", flush=True)
     stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d-%H%M")
     os.makedirs(os.path.join(HERE, "results"), exist_ok=True)
-    out_path = os.path.join(HERE, "results", f"{stamp}-prove-{who}.md")
-    rows, log = [], [f"# Proof trial {stamp} ({who})\n"]
+    label = "prove" if args.set == "first" or args.replay else f"prove-{args.set}"
+    out_path = os.path.join(HERE, "results", f"{stamp}-{label}-{who}.md")
+    rows, log = [], [f"# Proof trial {stamp} ({who}{'' if label == 'prove' else ', ' + args.set + ' set'})\n"]
     if args.replay:
         log.append(f"First answers from `{args.replay}`, graded again with `{CLC}`.\n")
-    for t in TASKS:
+    for t in SETS[args.set] if fixed is None else TASKS + HARD:
         if (args.only and t["name"] not in args.only) or (fixed is not None and t["name"] not in fixed):
             continue
         log.append(f"## {t['name']}\n\nTask: {t['task']}\n\n```cl\n{t['helper']}{t['header']}```\n")
