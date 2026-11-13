@@ -825,6 +825,15 @@ design and its decisions (D1...).
   theorems like `clMod_pos`; then replay the 1400 run (`--replay`), which should come out 7 of 7.
   No compiler change in this step, so no suite run.
 
+- **2026-11-13 (night 9, step 5): proofs know list lengths under `repeat` and assignment.** Three theorems
+  in the prelude (`clRepeat_size`, `clSet_size`, `clModify_size`, each `@[grind =]` and proved there, no
+  axiom): `repeat` makes `times` items for `times >= 0`; `xs[i] = v` and `xs[i].f = v` keep the length for
+  `i` in range. `tests/ok/loop-lists.cl`: five functions, all proved, the first being Haiku's
+  `reversed_list` from step 4. Replaying that run (`2026-11-13-1505-prove-replay-hard-haiku.md`): 7 of 7
+  first answers now. **Lean 46/46, C 32/32 + 5 skipped**; `--reference` 14 of 14, `--control` 14 of 14.
+  Not done: the items of a list after `xs[i] = v` (unchanged elsewhere, `v` at `i`), needed once an
+  `ensures` speaks of contents; no trial task does yet.
+
 ## Next step
 1. **Formal verification** (Ari, 2026-11-07: "we definitely want proofs, not just fuzzing"; see
    DESIGN.md open questions): contracts (`requires`/`ensures`), build-time counterexample search,
@@ -882,9 +891,12 @@ design and its decisions (D1...).
      `--reference`, both sets, after any change to how loops are proved. (iii-c) the `invariant` line and which of a pass's
      jobs: **done (night 9 step 3)**. (iii-d) the harder set on Haiku again and a fix-round trial:
      **done (night 9 step 4)**, `trials/provefix.py`: no difference on eight written flaws, 4 of 7 against 7 of
-     7 on Haiku's own `is_sorted` miss. **Next, in order:** (iii-e) list lengths in proofs: what `repeat`
-     and `xs[i] = v` do to `length` (the night-9 step-4 entry says what and how to check); (iii-f) grow
-     `provefix.py`'s cases from real misses; then (c) and (d). Small: a
+     7 on Haiku's own `is_sorted` miss. (iii-e) list lengths under `repeat` and `xs[i] = v`:
+     **done (night 9 step 5)**. **Next, in order:** (iii-f) a trial task whose `ensures` speaks of a
+     list's contents (e.g. "every item of the result is >= 0", or reverse against a definition), which
+     will want the items after `xs[i] = v` (`clGet (clSet xs i v) j`), and the limits tasks (`for x in
+     xs`, a `break`, nested loops, a local from an earlier loop); (iii-g) grow `provefix.py`'s cases
+     from real misses; then (c) and (d). Small: a
      `--goals` flag that shows the open goals clc now reads (they are in Lean's output after `CLGAP f_j`).
      (c) run-time checks: each `invariant` (not as an early `return`: try `v := clGuard ok msg v` on one state
      variable) and "`decreases` went down", so D32's search can show a false invariant with its input.

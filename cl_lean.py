@@ -115,6 +115,21 @@ def clIndexMsg (loc : String) (i : Int) (n : Nat) : String :=
   if 0 ≤ i ∧ i.toNat < xs.size then xs.modify i.toNat f else clTrap (clIndexMsg loc i xs.size)
 @[inline] def clRepeat {α : Type} (x : α) (n : Int) (msg : String) : Array α :=
   if n < 0 then clTrap msg else Array.replicate n.toNat x
+/-- What a proof knows about a list's length after these (D33, night 9): `xs[i] = v` and `xs[i]... = v` keep
+it when i is in range (out of range they are a trap, of which nothing is known), and `repeat` makes `times`
+items. `append` needs nothing: it is Lean's own `push`. -/
+@[grind =] theorem clSet_size {α : Type} (xs : Array α) (i : Int) (v : α) (loc : String)
+    (h0 : 0 ≤ i) (h1 : i < xs.size) : (clSet xs i v loc).size = xs.size := by
+  have h : 0 ≤ i ∧ i.toNat < xs.size := ⟨h0, by omega⟩
+  simp [clSet, h]
+@[grind =] theorem clModify_size {α : Type} (xs : Array α) (i : Int) (f : α → α) (loc : String)
+    (h0 : 0 ≤ i) (h1 : i < xs.size) : (clModify xs i f loc).size = xs.size := by
+  have h : 0 ≤ i ∧ i.toNat < xs.size := ⟨h0, by omega⟩
+  simp [clModify, h]
+@[grind =] theorem clRepeat_size {α : Type} (x : α) (n : Int) (msg : String) (h : 0 ≤ n) :
+    (clRepeat x n msg).size = n.toNat := by
+  have h' : ¬ n < 0 := by omega
+  simp [clRepeat, h']
 
 def clHex (s : String) : String :=
   if s.isEmpty then "-" else

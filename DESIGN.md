@@ -648,6 +648,14 @@ Claude differs from a human programmer in ways that matter for language design:
     (`reversed_list`) after one fix. That miss was clc's, not Haiku's: its loop filled a list made with
     `repeat` by `out[n - 1 - i] = xs[i]` under the true `invariant length(out) == n`, and proofs know
     nothing yet about the length of a `repeat` or of a list after `xs[i] = v`. Next step.
+  - *List lengths (night 9, step 5).* Three facts in the prelude, each a Lean theorem proved there and
+    used by `grind` as a rewrite: `repeat(item: x, times: n)` has `n` items when `n >= 0`; `xs[i] = v`
+    and `xs[i].f = v` keep the length when `i` is in range. Out of range (or a negative `times`) they
+    are a trap, and nothing is known (D34). `append` needed nothing, being Lean's own `push`. Haiku's
+    first `reversed_list` now proves as it wrote it (`tests/ok/loop-lists.cl`, with a `repeat`, an
+    assignment, an assignment into a struct in a list, and a loop that writes back into its list).
+    Still unknown to proofs: the items after `xs[i] = v` (that `xs[j]` is unchanged for `j != i`, and
+    `v` at `i`), which an `ensures` about a list's contents will need.
     *Tried first and dropped:* a small custom tactic that reads the open goal's name and writes it to
     stderr, so the theorem could keep falling back to its plain `clUnproved` axiom. It worked, but it needs
     `import Lean.Elab.Tactic.Basic`, the tactic is then compiled into the program, and a statically linked
