@@ -737,6 +737,36 @@ design and its decisions (D1...).
   suite takes 7 minutes on the loaded box, so a step that changes the prover waits on it twice (maybe a
   `run.py --proofs` that runs only the files with `ensures`).
 
+- 2026-11-13 (night 9, step 1): **the `unproved` warning says which part of which loop failed, and on the
+  way a hole turned up: loop proofs could "prove" a false `ensures`. Fixed (D34).**
+  (a) *The message, item (iii).* Each loop's invariant is wrapped in a mark, `clInv k (...)`; a goal the
+  closing tactic can't close is printed and closed by the theorem's gap axiom `clGap_f_j`; `read_gaps`
+  tells from where the mark stands whether the goal was the loop's start, a pass, or the `ensures` after
+  the loop, and `gap_reason` words it ("clc couldn't show that `invariant ...` is true when the `for` on
+  line 15 starts"). That is exactly what Haiku's first `is_sorted` answer now gets back (replay), where
+  last night it got the three-way "either ... or ... or". `tests/ok/loop-gaps.cl`: one function per case,
+  the wording checked by `# unproved: ...` marks. Dead end: a custom `elab` tactic that prints the open
+  goal's name (works, but `import Lean.Elab.Tactic.Basic` makes a static binary 118 MB instead of 4.5,
+  since the tactic is compiled into the program). Goal names alone don't name the loop anyway.
+  (b) *The hole.* A function ends in "if the `ensures` is broken, trap", and to the kernel a trap was
+  `default`. The loop tactic unfolds `clTrap`, so `grind` knew a trapped Int is 0, and an `ensures` that 0
+  satisfies (`result >= 0`) was proved whatever the loop did; the search (D32) only looks at unproved
+  ones, so a false `ensures` got through to run time in silence. In the compiler since night 7 step 6.
+  Found because the new mark made a no-invariant goal `clInv 1 True`, the tactic's `simp` closed it, and
+  the `grind` after it failed for want of a goal; with that mended (`<;>`), a function with no invariant
+  came out proved. The old tactic's wrong failure had been hiding the hole for loops with no invariant;
+  with any true invariant the hole was open (`down_too` in the new test). Fix: `opaque clTrapVal`,
+  `clTrap msg := clTrapVal`; `clDiv_v`/`clMod_v` now need `b ≠ 0`. Functions without loops never had it
+  (checked on last night's compiler). `tests/err/loop-trap-value.cl`: three false `ensures`; last night's
+  compiler reports one, this one all three.
+  (c) *Earlier results, graded again* (`prove.py --reference`, `--replay`, no model called): reference
+  answers 14 of 14, Haiku's first answers 7 of 7 and 6 of 7, the same as last night. Two tasks
+  (`count_evens`, `max_index`) have an `ensures` 0 satisfies, so the old compiler would have passed any
+  loop there; Haiku's invariants prove them honestly. Lesson for the trial: an answer that should NOT
+  prove belongs in the harness too (a wrong loop per task that must come back unproved or `ensures-false`).
+  Also: the full Lean suite takes 3 min 9 s on the resized box (2 vCPU, 4 GB), down from 7.
+  **Lean 44/44, C 32/32 + 4 skipped.**
+
 ## Next step
 1. **Formal verification** (Ari, 2026-11-07: "we definitely want proofs, not just fuzzing"; see
    DESIGN.md open questions): contracts (`requires`/`ensures`), build-time counterexample search,
@@ -787,9 +817,16 @@ design and its decisions (D1...).
      the helper definition itself, and ones that sit on today's limits to see what the model does there
      (`for x in xs`, a `break`, nested loops, a local from an earlier loop). **But (iii) comes first now:**
      both trial misses went back with a message that couldn't say which part failed. Also worth a sentence in SPEC once a trial shows it's needed: a contract may call another
-     function as the definition to agree with. (iii) which goal failed (entry / kept /
-     enough): `trials/lean/goals.py` (`all_goals first | TAC | (mleave; trace_state; sorry)`) shows it
-     for one theorem and could become a clc flag or a better `unproved` reason; then (c) and (d).
+     function as the definition to agree with. (iii) which goal failed:
+     **done (night 9 step 1)**, by loop and by part (start / a pass / after the loop); and **D34** closed
+     a hole it uncovered (a trap's value is unknown to proofs now). **Next, in order:** (iii-b) a negative
+     control in `trials/prove.py`: per task one wrong loop that must NOT come out proved (it would have
+     caught D34's hole on `count_evens` and `max_index`); (iii-c) split a pass's goal into its jobs (the
+     invariant kept / `decreases` smaller / a returned value meets the `ensures`) and name the `invariant`
+     line when a loop has several: the goal is a conjunction, so try the closing tactic on each part and
+     mark each line (`clInv k` per line); (iii-d) run `--set hard --only is_sorted digit_sum` on Haiku
+     again to see whether fix rounds now go straight to the failing part; then (c) and (d). Small: a
+     `--goals` flag that shows the open goals clc now reads (they are in Lean's output after `CLGAP f_j`).
      (c) run-time checks: each `invariant` (not as an early `return`: try `v := clGuard ok msg v` on one state
      variable) and "`decreases` went down", so D32's search can show a false invariant with its input.
      (d) `break`, nested loops (find out how `inv1..invN` are numbered), `for x in xs`, `reversed`.

@@ -299,7 +299,8 @@ Claude differs from a human programmer in ways that matter for language design:
     values are refcounted and updated in place when unshared (1M `push` + 1M `set!` in 0.05 s at
     `-O1`). Structs map to `structure`, enums to `inductive`, `Option`/`Result` to `Option`/`Except`,
     `match` to `match`, `var` and `for` to `do` with `let mut` and `for`. Lean frees memory, which
-    closes "nothing is freed". D16's traps are a `clTrap` that the kernel sees as `default` and that
+    closes "nothing is freed". D16's traps are a `clTrap` that the kernel sees as `default` (since D34: as a value nothing is known
+    about) and that
     at run time flushes stdout, prints `runtime error: ...` and exits 70, so a trap can't make a
     proof true, and a proof can show one is unreachable. Generated code never uses Lean's own
     `panic!`, which prints and then carries on with `default` (the spike printed "not reached").
@@ -423,7 +424,7 @@ Claude differs from a human programmer in ways that matter for language design:
     (1) **A value written twice must be one term.** `xs[i]`, `a / b`, `a % b` and a call to a function with a
     `requires` each carry the place they were written, for the trap's message, so `xs[i]` in the body and
     `xs[result]` in the `ensures` were different terms to `grind`, and so were `fib_spec(i)` in an invariant
-    and `fib_spec(n)` in the `ensures`. A place is no part of any value (a trap is `default` to the kernel
+    and `fib_spec(n)` in the `ensures`. A place is no part of any value (a trap is the same thing to the kernel
     whatever it would print), so now a place is the term `clAt line col`, which the kernel takes to be `""`
     and the running program computes as `file:line:col` (`implemented_by`, the same device as `clTrap`; a
     place only ever reaches a trap's message). One rule, `clAt line col = ""`, which `grind` always has,
@@ -445,10 +446,10 @@ Claude differs from a human programmer in ways that matter for language design:
     unfold (`spec_fns`), when they are pure and total. A callee in the body is not opened: it speaks
     through its own `ensures` (D31). With (1) to (4), an iterative `fib` is proved equal to the recursive
     `fib_spec` from `invariant a == fib_spec(i) and b == fib_spec(i + 1)`. Also `clDiv a b m = a / b` is a
-    rule now (`/` really is Lean's, 0 for a zero divisor), in place of unfolding `clDiv`.
+    rule now, in place of unfolding `clDiv` (since D34 only for a divisor that isn't 0).
     (5) **What `%` is, not only its bounds.** A proof knew `0 <= a % b < b` and nothing else, so it couldn't
-    use `m % 10 == m` below 10 or `m == 10 * (m / 10) + m % 10`. The rule `clMod a b m = if b = 0 then 0 else
-    a % b` gives `grind` Lean's `%` to reason with. This one a model found, not a reference answer: Haiku's
+    use `m % 10 == m` below 10 or `m == 10 * (m / 10) + m % 10`. The rule `clMod a b m = a % b` (first with 0 for a zero divisor;
+    since D34 only for a divisor that isn't 0) gives `grind` Lean's `%` to reason with. This one a model found, not a reference answer: Haiku's
     digit-sum loop (`while m > 0`, where mine stopped at `m >= 10` and so never needed it) was right and
     went unproved through two fix rounds.
   - *Not yet:* call-site proofs of `requires` (D31), loops (`invariant`), a heartbeat limit for a slow
@@ -465,7 +466,7 @@ Claude differs from a human programmer in ways that matter for language design:
     three outcomes: proved; "it follows from fn g's `ensures ...` (line N), which isn't proved" (only other
     functions' axioms); or not proved (its own axiom). Both unproved kinds are `unproved` warnings and count
     as unproved in "N of M proved", since a false assumption proves anything.
-  - *Not yet:* proving each call's `requires`. In this model a trap is `default` to the kernel, so "this call
+  - *Not yet:* proving each call's `requires`. In this model a trap is just some value to the kernel (D34), so "this call
     never breaks `requires`" isn't a statement about results; it needs either one theorem per call site with
     the path condition, or a model where traps are visible (an `Except`-style result). Until then a callee's
     `requires` is still checked at run time, and a caller's proof can only use the callee's `ensures` where
@@ -547,7 +548,8 @@ Claude differs from a human programmer in ways that matter for language design:
     its one loop with a `return` needed no invariant. Binary search found it.
   - *What it needed:* two lemmas about a range's list (the item after a prefix is the start plus the
     prefix's length, and lies inside the range) with explicit `grind_pattern`s; `clMod_pos` (`0 <= a % b <
-    b` for `b > 0`); unfolding `clTrap` before `grind`, so the long messages are gone. `import
+    b` for `b > 0`); unfolding `clTrap` before `grind`, so the long messages are gone (this is what let
+    loop proofs see a trap's value, which was `default` then: D34). `import
     Std.Tactic.Do` costs ~0.3 s CPU, and only files with a loop to prove need it.
   - *A function's `requires` are hypotheses of every goal,* so `invariant` lines don't have to repeat them
     (the recursive route would have needed that).
@@ -593,12 +595,73 @@ Claude differs from a human programmer in ways that matter for language design:
     item, `is_sorted` against a definition): 5 of 7 on the first answer and `is_sorted` after one fix
     (its invariant was false for an empty list, and Haiku found that from the generic message). The
     seventh, digit sum, was a correct answer clc couldn't prove (D30 night-8 point, 5); with that fixed,
-    its first answer proves, so 6 of 7 first answers.
+    its first answer proves, so 6 of 7 first answers. (Graded again after D34 closed a hole in loop
+    proofs: the same numbers.)
+  - *The warning says which part failed (2026-11-13, night 9).* An invariant has three jobs: be true when
+    the loop starts, be kept by a pass, and say enough once the loop is over. The warning used to list all
+    three as possibilities, and in two fix rounds Haiku answered it by adding true but useless `invariant`
+    lines. Now each loop's invariant is wrapped in a mark, `clInv k (...)`, which means just the invariant
+    (the closing tactic unfolds it). A goal that tactic can't close is printed (`trace_state`) and closed
+    by the theorem's own gap axiom, `clGap_f_j : ∀ p, p`, so the other goals are still tried, `#print
+    axioms` still shows the theorem isn't proved, and a caller that leans on it is reported as in D31. clc
+    reads each printed goal: the mark of loop k in what's to be shown and not in what's known is that
+    loop's start; in both, a pass; only in what's known, the `ensures` after that loop. The warning names
+    the loop and the part: "clc couldn't show that `invariant c == i and c >= 1` is true when the `for` on
+    line 11 starts", "that a pass of the `while` on line 23 keeps `invariant m >= 0` true and makes
+    `decreases n - m` smaller while it stays at 0 or above", "that this `ensures` follows from what is true
+    when the `for` on line 36 ends" (`tests/ok/loop-gaps.cl` has one function per case). Not split yet:
+    which of a pass's jobs failed (the invariant, the `decreases`, a value returned inside the loop), and
+    which line when a loop has several.
+    *Tried first and dropped:* a small custom tactic that reads the open goal's name and writes it to
+    stderr, so the theorem could keep falling back to its plain `clUnproved` axiom. It worked, but it needs
+    `import Lean.Elab.Tactic.Basic`, the tactic is then compiled into the program, and a statically linked
+    binary went from 4.5 MB to 118 MB (840 MB to link). Goal names alone (`vc3.step`,
+    `vc4.isTrue.post.success.pre`) wouldn't have been enough either: a `step` goal's name doesn't say
+    which loop it belongs to.
   - *Not yet decided or tried:* a run-time check of each invariant (wanted: then D32's search can show a
     false one with its input; it must not be an early `return`, which would change the loop's shape for the
     proof); a run-time check that `decreases` goes down, so an unproved loop can't hang; `break` (the state
     at a `break` isn't "the invariant and not the condition"); nested loops; `for x in xs` (the invariant
     can't name what has been seen so far; an index loop can); `reversed`; a recursive function with a loop.
+
+- **D34. To a proof, a trap is a value nothing is known about.** (2026-11-13, night 9; built. It closes a
+  hole through which a false `ensures` was reported proved.)
+  - *The hole:* every function with an `ensures` ends in "if the `ensures` doesn't hold for the result,
+    trap". The theorem is about what the function returns, so on that branch it asks whether the `ensures`
+    holds for the trap's value. To the kernel a trap was `default` (0, false, "", an empty list), meant as
+    "nothing a proof can use". But D33's closing tactic unfolds `clTrap` to shed the long messages, and
+    after that `grind` knows the value. So in a function with a loop, an `ensures` that 0 satisfies was
+    proved whatever the loop did: `ensures result >= 0` on a loop that counts down from 0, with the true
+    and useless `invariant t <= 0`, came out proved. Then the small-input search (D32), which only looks at
+    unproved ones, never ran, and the program stopped at run time with nothing said at build time.
+    Functions without loops never had it: their proofs don't unfold `clTrap` (checked on last night's
+    compiler with a plain and a recursive function).
+  - *The fix:* `opaque clTrapVal : α`, and `clTrap msg := clTrapVal`. Unfolding still sheds the message;
+    what is left is a constant with no definition. A proof that the `ensures` holds for it would be a
+    proof for any value, and then the check couldn't have failed.
+  - *What "proved" means,* said once: for every input the `requires` allow, if the function returns, what
+    it returns meets the `ensures`. A path that traps on the way (a bad index, `/` by zero) carries an
+    unknown value onward, so in practice such a function is proved only when the proof shows that path
+    can't happen, which a `requires` usually says.
+  - *`/` and `%`:* the rules `clDiv a b m = a / b` and `clMod a b m = a % b` now ask for `b ≠ 0`. Before,
+    `%` by zero was "0, which is what a trap is worth". Every proof in the tests still goes through: the
+    divisors there are literals, or a loop's condition says they aren't 0.
+  - *How it was found:* by an accident of the good kind. The night's message work (D33) put a mark on each
+    invariant; for a loop with no invariant the goal became `clInv 1 True`, which the tactic's `simp`
+    closes, and the `grind` after it then failed for want of a goal. Mending that (`<;>` for `;`) made a
+    function with no invariant come out proved, which can't be right. So the old tactic had been failing
+    on such goals for the wrong reason, and that failure had hidden the hole in the commonest case, a
+    loop with no invariant at all.
+  - *Tests:* `tests/err/loop-trap-value.cl` has three false `ensures` (no invariant; a useless one; a
+    `while` returning Bool, where `false` was the free value). Last night's compiler reports one of them;
+    this one reports all three, as `ensures-false` with the input.
+  - *What it changes in earlier results: nothing, as it turned out.* Two of the proof trial's fourteen
+    tasks have an `ensures` that 0 satisfies (`count_evens`: `result >= 0 and result <= length(xs)`;
+    `max_index`: `result >= 0 and result < length(xs)`), so on those the old compiler would have passed
+    any loop at all, and the trial measured nothing there. Graded again with this compiler
+    (`trials/results/2026-11-13-11*`): the reference answers 14 of 14; Haiku's first answers 7 of 7 on
+    the first set and 6 of 7 on the harder one, as before. Its invariants do carry those two proofs. Every
+    proof in the tests still goes through as well.
 
 ## Open questions
 

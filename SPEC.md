@@ -226,7 +226,8 @@ end fn name
   items seen so far. These lines may use the function's parameters, the variables the loop
   assigns, and a `let` from before the loop whose value is made from the parameters alone
   (`let n = length(xs)`). A loop with no `invariant` still runs; the `ensures` after it is just
-  less likely to be proved, and the `unproved` warning says which loop and what it lacks.
+  less likely to be proved. The `unproved` warning names the loop and which of the three clc couldn't
+  show: the invariant at the start, a pass keeping it, or the `ensures` once the loop is over.
 
 ## Calls
 

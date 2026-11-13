@@ -14,7 +14,8 @@ Choices worth knowing:
 - Every Int literal is written `(5 : Int)`, since an unannotated literal in Lean defaults to Nat.
 - Functions are emitted callees first; a recursive group becomes `mutual partial def` (proving termination is a
   later stage). A function with no parameters takes `()`, so it isn't a constant computed at startup.
-- Traps (division by zero, falling off the end of a function) are `clTrap`: `default` to the kernel, and at
+- Traps (division by zero, falling off the end of a function) are `clTrap`: to the kernel a value nothing
+  is known about (`clTrapVal`), and at
   run time a flushed stdout, `file:line:col: runtime error: ...` on stderr and exit 70 (D16). `never_extract`
   stops the compiler from hoisting a constant trap into module initialization.
 - `/` and `%` are Lean's (Euclidean, D27), checked for zero.
@@ -36,15 +37,19 @@ unsafe def clTrapImpl {α : Type} [Inhabited α] (msg : String) : α :=
   match unsafeIO (do (← IO.getStdout).flush; clRealOut "/dev/stderr" msg; (IO.Process.exit 70 : IO α)) with
   | .ok a => a
   | .error _ => default
-/-- A runtime error (D16): `default` as far as the kernel is concerned, so a proof can't use it; at run time it
-prints `msg` and exits 70. -/
+/-- What a trap is worth to a proof: some value of its type, and nothing more is known. Not `default`: a
+function ends in "if the `ensures` is broken, trap", so with 0 for a trapped Int a proof could show `ensures
+result >= 0` from the very trap that reports it broken. (It did, in loop proofs, until night 9.) -/
+opaque clTrapVal {α : Type} [Inhabited α] : α
+/-- A runtime error (D16): `clTrapVal` as far as the kernel is concerned, so a proof can't use it; at run time
+it prints `msg` and exits 70. -/
 @[implemented_by clTrapImpl, noinline, never_extract]
-def clTrap {α : Type} [Inhabited α] (msg : String) : α := default
+def clTrap {α : Type} [Inhabited α] (msg : String) : α := clTrapVal
 
 def clFile : String := @FILESTR@
 def clAtImpl (line col : Nat) : String := clFile ++ ":" ++ toString line ++ ":" ++ toString col
 /-- A place in the source, `file:line:col`, for a trap's message. To the kernel every place is `""`: a place is
-no part of any value (a trap is `default` whatever it would print), and to a proof `xs[i]` or a call `f(x)` must
+no part of any value (a trap is `clTrapVal` whatever it would print), and to a proof `xs[i]` or a call `f(x)` must
 be one value wherever it is written, which `clAt_eq` gives `grind`. It also keeps the file's path out of every
 term: with a 100-character path in each place, `grind` ran out of recursion depth comparing them. At run time
 it is the real place; `clAt 6 10` is a closed term, so it is computed once, not on each pass of a loop. -/
@@ -56,14 +61,13 @@ it is the real place; `clAt 6 10` is a closed term, so it is computed once, not 
 /-- What termination proofs need about `%` (D28): gcd's `b.natAbs` goes down because `a % b` is below `|b|`. -/
 theorem clMod_bound (a b : Int) (m : String) (h : b ≠ 0) : 0 ≤ clMod a b m ∧ clMod a b m < b.natAbs := by
   simp only [clMod, beq_iff_eq, h, ite_false]; exact ⟨Int.emod_nonneg a h, Int.emod_lt a h⟩
-/-- To a proof `a / b` is Lean's own `/`: 0 when b is 0, which is also what a trap is worth. `a % b` is Lean's
-`%` except for a zero divisor (Lean's `a % 0` is `a`; a trap is worth 0). Without `clMod_v` a proof knew only
-`%`'s bounds, not that `m % 10` is `m` below 10 or that `m` is `10 * (m / 10) + m % 10`. -/
-@[grind =] theorem clDiv_v (a b : Int) (m : String) : clDiv a b m = a / b := by
-  simp only [clDiv, clTrap]; split <;> simp_all <;> rfl
-@[grind =] theorem clMod_v (a b : Int) (m : String) : clMod a b m = if b = 0 then 0 else a % b := by
-  unfold clMod clTrap
-  by_cases h : b = 0 <;> simp [h] <;> rfl
+/-- To a proof `a / b` and `a % b` are Lean's own `/` and `%` when b isn't 0; by 0 they are a trap, of which
+nothing is known. Without `clMod_v` a proof knew only `%`'s bounds, not that `m % 10` is `m` below 10 or that
+`m` is `10 * (m / 10) + m % 10`. -/
+@[grind =] theorem clDiv_v (a b : Int) (m : String) (h : b ≠ 0) : clDiv a b m = a / b := by
+  simp only [clDiv, beq_iff_eq, h, ite_false]
+@[grind =] theorem clMod_v (a b : Int) (m : String) (h : b ≠ 0) : clMod a b m = a % b := by
+  simp only [clMod, beq_iff_eq, h, ite_false]
 
 /-- claude-lang's printed form of a value inside a list or struct: strings quoted with the language's own
 escapes, lists as `[1, 2]` (D18, D19). At the top of `print` and `{...}` a String prints as itself. -/
@@ -498,6 +502,10 @@ theorem clMod_pos (a b : Int) (m : String) (h : 0 < b) : 0 ≤ clMod a b m ∧ c
   have hb : b ≠ 0 := by omega
   simp only [clMod, beq_iff_eq, hb, ite_false]; exact ⟨Int.emod_nonneg a hb, Int.emod_lt_of_pos a h⟩
 grind_pattern clMod_pos => clMod a b m
+/-- Marks loop `k`'s invariant in a proof's goals, so that a goal left open can be told apart: the loop's start
+(the mark is in what's to be shown, not in what's known), a pass (in both), or after the loop (only in what's
+known). It means just `p`. -/
+def clInv (k : Nat) (p : Prop) : Prop := p
 """
 
 # What every contract proof hands `grind` (D30, D33): `%`'s bound, and a case split it doesn't make
@@ -509,10 +517,11 @@ GRIND_HINTS = "[clMod_bound, Bool.and_eq_false_iff]"
 
 
 def loop_tactic(hints):
-    """The one tactic that closes every goal `mvcgen` leaves (D33): drop the trap messages and the list lengths,
-    then grind."""
-    return ("(mleave; (try simp only [clTrap, List.length_append, List.length_cons, List.length_nil, "
-            f"Int.length_toList_rcc, Int.length_toList_rco] at *); grind {hints})")
+    """The one tactic that closes every goal `mvcgen` leaves (D33): drop the trap messages, the loop marks and
+    the list lengths, then grind. `<;>`, not `;`: when the first part already closes the goal (`clInv k True`,
+    a loop with no invariant), a `grind` after it would fail for want of a goal."""
+    return ("(mleave; (try simp only [clTrap, clInv, List.length_append, List.length_cons, List.length_nil, "
+            f"Int.length_toList_rcc, Int.length_toList_rco] at *) <;> grind {hints})")
 
 
 def assigned_in(stmts):
@@ -918,7 +927,8 @@ class LeanEmitter:
         params = {n for n, _, _ in f.params}
         ens = contracts(f, "ensures")
         terms = []
-        for lp in loops:
+        self.loop_list[f.name] = loops  # loop k of the proof's goals (`clInv k`) is loops[k - 1]
+        for k, lp in enumerate(loops, 1):
             line = lp.tok.line
             word = f"the `{lp.kind}` on line {line}"
             if nodes_of(lp.body, "while") or nodes_of(lp.body, "for"):
@@ -997,7 +1007,8 @@ class LeanEmitter:
                     during = f"{ret} = none ∧ ({during})"
                     after = f"(∀ cl_v, {ret} = some cl_v → {ensured}) ∧ ({ret} = none → {after})"
                 terms.append(f"fun cl_s => {pre}{bind(st)}⟨({self.expr(dec.expr)}).toNat⟩")
-                terms.append(f"⇓ cl_x => match cl_x with | .inl cl_s => ⌜{during}⌝ | .inr cl_s => ⌜{after}⌝")
+                terms.append(f"⇓ cl_x => match cl_x with | .inl cl_s => ⌜clInv {k} ({during})⌝ "
+                             f"| .inr cl_s => ⌜clInv {k} ({after})⌝")
             else:
                 st, ret = ("cl_x.2.2", "cl_x.2.1") if returns else ("cl_x.2", None)
                 at = f"let v_{index} : Int := {self.expr(lp.lo)} + cl_x.1.prefix.length; " if index else ""
@@ -1008,7 +1019,7 @@ class LeanEmitter:
                     # and so that the invariant held. As an `or`, so `grind` needn't take the Option apart.
                     during = (f"({ret} = none ∨ cl_x.1.suffix = []) ∧ (∀ cl_v, {ret} = some cl_v → {ensured}) ∧ "
                               f"({ret} = none → {during})")
-                terms.append(f"⇓ cl_x => ⌜{during}⌝")
+                terms.append(f"⇓ cl_x => ⌜clInv {k} ({during})⌝")
         bare = [lp for lp in loops if not getattr(lp, "invariants", [])]
         if bare:
             why = (f"the `{bare[0].kind}` on line {bare[0].tok.line} has no `invariant` line saying what stays "
@@ -1051,6 +1062,7 @@ class LeanEmitter:
         self.specs = []
         self.loop_proofs = False  # some theorem below uses `mvcgen`, so the file needs its import
         self.loop_why = {}        # fn name -> why its `ensures` isn't proved, when the reason is a loop
+        self.loop_list = {}       # fn name -> its loops in source order, as `loop_plan` numbered them
         for comp in self.comps:
             for name in comp:
                 f = self.by_name[name]
@@ -1088,7 +1100,11 @@ class LeanEmitter:
                             self.loop_proofs = True
                         script = [f"(generalize cl_h : {call} = cl_r", "     apply Id.of_wp_run_eq cl_h", "     mvcgen"]
                         script += [f"     case inv{i + 1} => exact {t}" for i, t in enumerate(terms)]
-                        script.append(f"     all_goals {loop_tactic(hints)})")
+                        # A goal that tactic can't close is printed (`read_specs` tells from it which part of
+                        # which loop it was) and closed by this theorem's own "anything goes" axiom, so the
+                        # other goals are still tried and `#print axioms` shows the theorem isn't proved.
+                        script.append(f"     all_goals first | {loop_tactic(hints)} | ((try mleave); "
+                                      f"trace \"CLGAP @THM@\"; trace_state; exact clGap_@THM@ _))")
                         tactics = ["\n".join(script)]
                 for j, c in enumerate(ens):
                     thm = f"clSpec_{name}_{j}"
@@ -1099,10 +1115,12 @@ class LeanEmitter:
                     out.append(f"-- fn {name}: ensures {c.text} (line {c.tok.line})")
                     out.append(f"axiom clUnproved_{name}_{j} {' '.join(binders)} :")
                     out.append(f"    {goal}")
+                    if "@THM@" in tactics[0]:
+                        out.append(f"axiom clGap_{name}_{j} (p : Prop) : p")
                     out.append(f"theorem {thm} {' '.join(binders)} :")
                     out.append(f"    {goal} := by")
                     out.append("  first")
-                    out += [f"  | {t}" for t in tactics]
+                    out += [f"  | {t.replace('@THM@', f'{name}_{j}')}" for t in tactics]
                     out.append(f"  | exact clUnproved_{name}_{j} {' '.join(names)}")
                     out.append(f"#print axioms {thm}")
                     # Callers' proofs get this fact wherever they call the function (D31). Its default trigger
@@ -1110,8 +1128,80 @@ class LeanEmitter:
                     out.append(f"grind_pattern {thm} => {self.lname(name)} {args}")
                     self.specs.append((f, c, thm, None))
 
+    def read_gaps(self, stdout):
+        """The goals each loop proof left open: theorem (`f_j`) -> a sorted list of (loop number, part), where
+        part is 0 "the invariant when the loop starts", 1 "a pass of the loop", 2 "this `ensures`, after the
+        loop" (loop number 0: on a way through the function that ran no loop). Lean prints `CLGAP f_j` and
+        then each open goal, starting at a `case` line; where loop k's mark `clInv k` stands in the goal says
+        which part it is (see `clInv`)."""
+        gaps, cur, block = {}, None, None
+
+        def close():
+            if cur is None or block is None:
+                return
+            at = next((i for i, ln in enumerate(block) if ln.startswith("⊢")), len(block))
+            known = {int(k) for k in re.findall(r"clInv\s+(\d+)", "\n".join(block[:at]))}
+            goal = {int(k) for k in re.findall(r"clInv\s+(\d+)", "\n".join(block[at:]))}
+            for k in goal:
+                gaps[cur].add((k, 1 if k in known else 0))
+            if not goal:
+                gaps[cur].add((max(known, default=0), 2))
+        for ln in stdout.splitlines():
+            m = re.match(r"CLGAP (\w+)$", ln)
+            if m:
+                close()
+                cur, block = m.group(1), None
+                gaps.setdefault(cur, set())
+            elif cur is not None and ln.startswith("case "):
+                close()
+                block = [ln]
+            elif cur is not None and (ln.startswith(("'", "EX")) or re.match(r"\S+\.lean:\d+:\d+: ", ln)):
+                close()  # the theorem's `#print axioms` line, or some other message: the goals are over
+                cur, block = None, None
+            elif block is not None:
+                block.append(ln)
+        close()
+        return {thm: sorted(found) for thm, found in gaps.items()}
+
+    def gap_reason(self, f, gaps):
+        """Why an `ensures` of fn f isn't proved, from the goals its loop proof left open (`read_gaps`): which
+        loop, and which of the three things an invariant must do (hold at the start, be kept by a pass, say
+        enough at the end) clc couldn't show."""
+        loops = self.loop_list.get(f.name, [])
+        parts = []
+        for k, part in gaps or []:
+            if k > len(loops):
+                return None
+            if k == 0:
+                parts.append("clc couldn't show it for a way through the function that runs none of its loops")
+                continue
+            lp = loops[k - 1]
+            invs = getattr(lp, "invariants", [])
+            dec = getattr(lp, "decreases", None)
+            word = f"the `{lp.kind}` on line {lp.tok.line}"
+            inv = f"`invariant {invs[0].text}`" if len(invs) == 1 else f"its {len(invs)} `invariant` lines"
+            if part == 0:
+                parts.append(f"clc couldn't show that {inv} {'is' if len(invs) == 1 else 'are'} true when {word} "
+                             f"starts")
+            elif part == 1:
+                does = [f"keeps {inv} true"] if invs else []
+                if dec is not None:
+                    does.append(f"makes `decreases {dec.text}` smaller while it stays at 0 or above")
+                if nodes_of(lp.body, "return"):
+                    does.append("returns only a value that meets this `ensures`")
+                does = does[0] if len(does) == 1 else ", ".join(does[:-1]) + " and " + does[-1]
+                parts.append(f"clc couldn't show that a pass of {word} {does}")
+            elif not invs:
+                parts.append(f"{word} has no `invariant` line saying what stays true as it runs, and without one "
+                             f"clc couldn't show this `ensures` after the loop")
+            else:
+                parts.append(f"clc couldn't show that this `ensures` follows from what is true when {word} ends "
+                             f"({inv}, and that the loop is over)")
+        return "; also, ".join(parts) or None
+
     def read_specs(self, stdout):
         """Which of `spec_theorems`' theorems Lean proved: (fn, ensures line, None if proved else why not)."""
+        gaps = self.read_gaps(stdout)
         axioms = {}
         for ln in stdout.splitlines():
             m = re.match(r"'([^']+)' (does not depend on any axioms|depends on axioms: \[(.*)\])", ln)
@@ -1122,15 +1212,17 @@ class LeanEmitter:
         for f, c, thm, why in getattr(self, "specs", []):
             if why is None:
                 used = axioms.get(thm, {"sorryAx"})
-                own = "clUnproved_" + thm[len("clSpec_"):]
-                assumed = sorted(a for a in used if a.startswith("clUnproved_") and a != own)
-                if own in used or "sorryAx" in used:
-                    why = (self.loop_why.get(f.name) or
+                me = thm[len("clSpec_"):]
+                # An unproved `ensures` shows as its theorem's axiom: `clUnproved_f_j` (the claim itself), or
+                # `clGap_f_j` when a loop proof left goals open.
+                others = sorted({a.split("_", 1)[1] for a in used if a.startswith(("clUnproved_", "clGap_"))} - {me})
+                if "clUnproved_" + me in used or "clGap_" + me in used or "sorryAx" in used:
+                    why = (self.gap_reason(f, gaps.get(me)) or self.loop_why.get(f.name) or
                            "clc's automation (`grind`, with induction for recursion) didn't find a proof")
-                elif assumed:
+                elif others:
                     parts = []
-                    for a in assumed:
-                        g, e = by_thm["clSpec_" + a[len("clUnproved_"):]]
+                    for a in others:
+                        g, e = by_thm["clSpec_" + a]
                         parts.append(f"fn {g.name}'s `ensures {e.text}` (line {e.tok.line})")
                     why = (f"it follows from {', '.join(parts)}, which "
                            f"{'isn' if len(parts) == 1 else 'aren'}'t proved")
