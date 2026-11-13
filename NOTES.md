@@ -834,6 +834,21 @@ design and its decisions (D1...).
   Not done: the items of a list after `xs[i] = v` (unchanged elsewhere, `v` at `i`), needed once an
   `ensures` speaks of contents; no trial task does yet.
 
+- 2026-11-13 (night 9, wrap-up): five steps. The `unproved` warning for a loop now says which loop, which
+  `invariant` line, and what about it clc couldn't show (true at the start; kept by a pass; `decreases`
+  smaller; a returned value; enough at the end). Making it say so uncovered a hole, closed as **D34**: a
+  false `ensures` on a function with a loop was reported proved whenever 0 (or false, "", []) satisfied
+  it, because to a proof a trap was worth the default value; it is an unknown value now. The proof trial
+  got a control (one wrong loop per task that must not come out proved: 14 of 14 caught, 12 of 14 by
+  night 8's compiler) and a fix-round trial (`provefix.py`: old words against new, no difference on
+  eight written flaws, 4 of 7 against 7 of 7 on Haiku's own miss). Haiku's fresh run found that proofs
+  knew nothing of list lengths under `repeat` and `xs[i] = v`; they do now, and that run replays at 7 of
+  7 first answers. Nothing is parked half-done; Lean 46/46, C 32/32 + 5 skipped. **Start next time at
+  (iii-f) under "Next step": a trial task whose `ensures` speaks of a list's contents.** Small things
+  seen on the way: `prove.py --replay` grades only first answers (a `--attempt N` would have saved a
+  script); result files from `--reference`/`--control` pile up when nothing changed (maybe write them
+  only on a change or with `--keep`); the Lean suite is 3.5 min on the resized box.
+
 ## Next step
 1. **Formal verification** (Ari, 2026-11-07: "we definitely want proofs, not just fuzzing"; see
    DESIGN.md open questions): contracts (`requires`/`ensures`), build-time counterexample search,
