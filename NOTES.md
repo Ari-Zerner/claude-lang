@@ -787,6 +787,26 @@ design and its decisions (D1...).
   Not run: the full suites (the compiler didn't change; the new test and `loop-trap-value` pass, and
   `--reference --only mul`). Lean is 45 tests now.
 
+- **2026-11-13 (night 9, step 3): the warning names the `invariant` line and which of a pass's jobs failed.**
+  Each job has its own mark now: `clInv k j` (line j of loop k; j = 0 for what clc adds itself), `clRet k`
+  (a value returned inside the loop meets the `ensures`), `clDec k` (around the `decreases` measure). A goal
+  the closing tactic can't close whole is taken apart at its `∧`s and `→`s (`gap_tactic`), each part is
+  tried, and only what stays open is printed; `read_gaps` returns (loop, part, job) and `gap_reason` words
+  it. Examples, all in `tests/ok/loop-gaps.cl` (three functions added): "a pass of the `for` on line 92
+  keeps `invariant s == i` true" (of two lines); "a pass of the `while` on line 25 makes `decreases n - m`
+  smaller while it stays at 0 or above" (no longer adds the invariant, which is kept); "a pass of the
+  `while` on line 123 returns only a value that meets this `ensures`"; the start names its line too.
+  Two traps on the way, both in D33: `repeat'` takes a whole tactic sequence, so without parentheses the
+  rest of the line was its body and an unsplittable goal was left open (a Lean error, not a failed
+  alternative); and a `while` pass's goal is "there is a new measure value a with ...", settled by
+  `apply Exists.intro` then `exact rfl` on its first part. Also a Python slip caught by the tests: a local
+  named `scope` shadowed `loop_plan`'s own.
+  Checked: **Lean 45/45**; `prove.py --reference` 14 of 14 and `--control` 14 of 14 (both sets); Haiku's
+  first answers on the hard set, replayed: 6 of 7 as before (the miss is `is_sorted`, a one-line invariant
+  false at the start, worded as in step 1). The C suite wasn't run (only `cl_lean.py` changed). No stored
+  Haiku answer fails on a pass or with several lines, so what the new wording does to a fix round is
+  still to be seen: that is (iii-d).
+
 ## Next step
 1. **Formal verification** (Ari, 2026-11-07: "we definitely want proofs, not just fuzzing"; see
    DESIGN.md open questions): contracts (`requires`/`ensures`), build-time counterexample search,
@@ -841,10 +861,8 @@ design and its decisions (D1...).
      **done (night 9 step 1)**, by loop and by part (start / a pass / after the loop); and **D34** closed
      a hole it uncovered (a trap's value is unknown to proofs now). (iii-b) a negative control: **done (night 9 step 2)**,
      `prove.py --control`, 14 of 14 wrong loops caught (12 of 14 by night 8's compiler); run it and
-     `--reference`, both sets, after any change to how loops are proved. **Next, in order:** (iii-c) split a pass's goal into its jobs (the
-     invariant kept / `decreases` smaller / a returned value meets the `ensures`) and name the `invariant`
-     line when a loop has several: the goal is a conjunction, so try the closing tactic on each part and
-     mark each line (`clInv k` per line); (iii-d) run `--set hard --only is_sorted digit_sum` on Haiku
+     `--reference`, both sets, after any change to how loops are proved. (iii-c) the `invariant` line and which of a pass's
+     jobs: **done (night 9 step 3)**. **Next, in order:** (iii-d) run `--set hard --only is_sorted digit_sum` on Haiku
      again to see whether fix rounds now go straight to the failing part; then (c) and (d). Small: a
      `--goals` flag that shows the open goals clc now reads (they are in Lean's output after `CLGAP f_j`).
      (c) run-time checks: each `invariant` (not as an early `return`: try `v := clGuard ok msg v` on one state

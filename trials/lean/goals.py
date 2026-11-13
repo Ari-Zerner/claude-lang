@@ -23,7 +23,7 @@ if not m:
 stmt, script = m.group(1), m.group(2)
 lines = script.split("\n")
 closing = lines[-1].strip()
-m = re.match(r"all_goals first \| (\(mleave; .*\)) \| \(\(try mleave\); trace ", closing)
+m = re.match(r"all_goals first \| (\(mleave; .*?\)) \| \(\(try mleave\); ", closing)
 if not m:
     sys.exit(f"fn {fn}'s proof isn't an `mvcgen` script (no loop?)")
 tac = sys.argv[3] if len(sys.argv) > 3 else m.group(1)

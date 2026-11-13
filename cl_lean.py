@@ -502,10 +502,15 @@ theorem clMod_pos (a b : Int) (m : String) (h : 0 < b) : 0 ≤ clMod a b m ∧ c
   have hb : b ≠ 0 := by omega
   simp only [clMod, beq_iff_eq, hb, ite_false]; exact ⟨Int.emod_nonneg a hb, Int.emod_lt_of_pos a h⟩
 grind_pattern clMod_pos => clMod a b m
-/-- Marks loop `k`'s invariant in a proof's goals, so that a goal left open can be told apart: the loop's start
-(the mark is in what's to be shown, not in what's known), a pass (in both), or after the loop (only in what's
-known). It means just `p`. -/
-def clInv (k : Nat) (p : Prop) : Prop := p
+/-- Marks line `j` of loop `k`'s invariant in a proof's goals (`j` 0: something clc adds itself), so that a goal
+left open can be told apart: the loop's start (the mark is in what's to be shown, not in what's known), a pass
+(in both), or after the loop (only in what's known). It means just `p`. Irreducible, so that taking a goal
+apart at its `∧`s and `→`s stops at a mark. -/
+@[irreducible] def clInv (k j : Nat) (p : Prop) : Prop := p
+/-- Marks, for loop `k`, "a value returned inside the loop meets the `ensures`". It means just `p`. -/
+@[irreducible] def clRet (k : Nat) (p : Prop) : Prop := p
+/-- Marks loop `k`'s `decreases` measure. It means just `n`. -/
+def clDec (k : Nat) (n : Nat) : Nat := n
 """
 
 # What every contract proof hands `grind` (D30, D33): `%`'s bound, and a case split it doesn't make
@@ -516,12 +521,29 @@ GRIND_HINTS = "[clMod_bound, Bool.and_eq_false_iff]"
 
 
 
-def loop_tactic(hints):
+def loop_tactic(hints, leave=True):
     """The one tactic that closes every goal `mvcgen` leaves (D33): drop the trap messages, the loop marks and
-    the list lengths, then grind. `<;>`, not `;`: when the first part already closes the goal (`clInv k True`,
-    a loop with no invariant), a `grind` after it would fail for want of a goal."""
-    return ("(mleave; (try simp only [clTrap, clInv, List.length_append, List.length_cons, List.length_nil, "
-            f"Int.length_toList_rcc, Int.length_toList_rco] at *) <;> grind {hints})")
+    the list lengths, then grind. `<;>`, not `;`: when the first part already closes the goal (`clInv k 0
+    True`, a loop with no invariant), a `grind` after it would fail for want of a goal. `leave=False`: for a
+    goal that `mleave` has already been through."""
+    return (f"({'mleave; ' if leave else ''}(try simp only [clTrap, clInv, clRet, clDec, List.length_append, "
+            f"List.length_cons, List.length_nil, Int.length_toList_rcc, Int.length_toList_rco] at *) <;> "
+            f"grind {hints})")
+
+
+def gap_tactic(hints):
+    """What a goal the closing tactic can't close gets instead (D33): take it apart into the jobs it is made
+    of, each under its own mark (an `invariant` line, the `decreases`, a returned value), and try the closing
+    tactic on each. A part still open is printed, for `read_gaps`, and closed by the theorem's own "anything
+    goes" axiom, so the other goals are still tried and `#print axioms` shows the theorem isn't proved.
+    A pass of a `while` asks for the measure's new value (`∃ a, "the measure is now a" ∧ ...`): the first
+    `try` leaves it open and lets `rfl` on that first part settle it, so no part is tried with the value
+    still open. The parentheses around `repeat'` matter: it takes a whole sequence, so without them the
+    rest of the line is its body and runs only where the first split succeeded."""
+    return ("((try mleave); (try (apply Exists.intro; refine And.intro ?_ ?_; exact rfl)); "
+            "(repeat' (first | refine And.intro ?_ ?_ | intro _)); "
+            f"all_goals first | {loop_tactic(hints, leave=False)} | "
+            "(trace \"CLGAP @THM@\"; trace_state; exact clGap_@THM@ _))")
 
 
 def assigned_in(stmts):
@@ -991,35 +1013,39 @@ class LeanEmitter:
                     proj = tup if len(state) == 1 else tup + ".2" * j + (".1" if j < len(state) - 1 else "")
                     out += f"let v_{v} : {ltype(lets[v].var_ty, v)} := {proj}; "
                 return out
-            inv = " && ".join(f"({self.expr(h.expr)})" for h in invs) or "true"
             returns = bool(nodes_of(lp.body, "return"))
             self.names = {"result": "cl_v"}
             ensured = " ∧ ".join(f"({self.expr(c.expr)}) = true" for c in ens) or "True"
             self.names = {}
+
+            def marked(reach):
+                """The invariant lines, each under its own mark (`clInv k j`), so that a goal left open says
+                which line it is about. `reach`: the `let`s that put the loop's variables in reach."""
+                return " ∧ ".join(f"clInv {k} {j} ({reach}({self.expr(h.expr)}) = true)"
+                                  for j, h in enumerate(invs, 1)) or f"clInv {k} 0 True"
             if lp.kind == "while":
                 st, ret = ("cl_s.2", "cl_s.1") if returns else ("cl_s", None)
-                cond = self.expr(lp.cond)
-                during = f"{pre}{bind(st)}({inv}) = true"
-                after = f"{pre}{bind(st)}({inv}) = true ∧ ¬ ({cond}) = true"
+                reach = pre + bind(st)
+                during = marked(reach)
+                after = f"{during} ∧ clInv {k} 0 ({reach}¬ ({self.expr(lp.cond)}) = true)"
                 if returns:
                     # While the loop runs nothing has been returned yet, and a pass may count on that: without
                     # it the invariant, which only speaks when nothing was returned, is no use to the next pass.
-                    during = f"{ret} = none ∧ ({during})"
-                    after = f"(∀ cl_v, {ret} = some cl_v → {ensured}) ∧ ({ret} = none → {after})"
-                terms.append(f"fun cl_s => {pre}{bind(st)}⟨({self.expr(dec.expr)}).toNat⟩")
-                terms.append(f"⇓ cl_x => match cl_x with | .inl cl_s => ⌜clInv {k} ({during})⌝ "
-                             f"| .inr cl_s => ⌜clInv {k} ({after})⌝")
+                    during = f"clInv {k} 0 ({ret} = none) ∧ {during}"
+                    after = f"clRet {k} (∀ cl_v, {ret} = some cl_v → {ensured}) ∧ ({ret} = none → {after})"
+                terms.append(f"fun cl_s => {reach}⟨clDec {k} ({self.expr(dec.expr)}).toNat⟩")
+                terms.append(f"⇓ cl_x => match cl_x with | .inl cl_s => ⌜{during}⌝ | .inr cl_s => ⌜{after}⌝")
             else:
                 st, ret = ("cl_x.2.2", "cl_x.2.1") if returns else ("cl_x.2", None)
                 at = f"let v_{index} : Int := {self.expr(lp.lo)} + cl_x.1.prefix.length; " if index else ""
-                during = f"{pre}{at}{bind(st)}({inv}) = true"
+                during = marked(pre + at + bind(st))
                 if returns:
                     # A `return` ends the loop, so a value has been returned only when nothing is left to visit;
                     # saying so lets a pass (which has an item in hand) know that nothing was returned before it,
                     # and so that the invariant held. As an `or`, so `grind` needn't take the Option apart.
-                    during = (f"({ret} = none ∨ cl_x.1.suffix = []) ∧ (∀ cl_v, {ret} = some cl_v → {ensured}) ∧ "
-                              f"({ret} = none → {during})")
-                terms.append(f"⇓ cl_x => ⌜clInv {k} ({during})⌝")
+                    during = (f"clInv {k} 0 ({ret} = none ∨ cl_x.1.suffix = []) ∧ "
+                              f"clRet {k} (∀ cl_v, {ret} = some cl_v → {ensured}) ∧ ({ret} = none → {during})")
+                terms.append(f"⇓ cl_x => ⌜{during}⌝")
         bare = [lp for lp in loops if not getattr(lp, "invariants", [])]
         if bare:
             why = (f"the `{bare[0].kind}` on line {bare[0].tok.line} has no `invariant` line saying what stays "
@@ -1100,11 +1126,9 @@ class LeanEmitter:
                             self.loop_proofs = True
                         script = [f"(generalize cl_h : {call} = cl_r", "     apply Id.of_wp_run_eq cl_h", "     mvcgen"]
                         script += [f"     case inv{i + 1} => exact {t}" for i, t in enumerate(terms)]
-                        # A goal that tactic can't close is printed (`read_specs` tells from it which part of
-                        # which loop it was) and closed by this theorem's own "anything goes" axiom, so the
-                        # other goals are still tried and `#print axioms` shows the theorem isn't proved.
-                        script.append(f"     all_goals first | {loop_tactic(hints)} | ((try mleave); "
-                                      f"trace \"CLGAP @THM@\"; trace_state; exact clGap_@THM@ _))")
+                        # A goal that tactic can't close is taken apart, and what stays open is printed
+                        # (`read_specs` tells from it which loop, and what about it) and given up.
+                        script.append(f"     all_goals first | {loop_tactic(hints)} | {gap_tactic(hints)})")
                         tactics = ["\n".join(script)]
                 for j, c in enumerate(ens):
                     thm = f"clSpec_{name}_{j}"
@@ -1129,23 +1153,28 @@ class LeanEmitter:
                     self.specs.append((f, c, thm, None))
 
     def read_gaps(self, stdout):
-        """The goals each loop proof left open: theorem (`f_j`) -> a sorted list of (loop number, part), where
-        part is 0 "the invariant when the loop starts", 1 "a pass of the loop", 2 "this `ensures`, after the
-        loop" (loop number 0: on a way through the function that ran no loop). Lean prints `CLGAP f_j` and
-        then each open goal, starting at a `case` line; where loop k's mark `clInv k` stands in the goal says
-        which part it is (see `clInv`)."""
+        """What each loop proof left open: theorem (`f_j`) -> a sorted list of (loop number, part, job). Part
+        is 0 "when the loop starts", 1 "a pass of the loop", 2 "this `ensures`, after the loop" (loop number
+        0: on a way through the function that ran no loop). Job says what about a start or a pass: n > 0 the
+        loop's n-th `invariant` line, -1 its `decreases`, -2 "a value returned inside it meets the `ensures`",
+        0 nothing more exact. Lean prints `CLGAP f_j` and then each open goal, starting at a `case` line; the
+        marks in it (`clInv k n`, `clDec k`, `clRet k`) say which loop and job, and whether loop k's marks
+        also stand in what's known says start or pass (see `clInv`)."""
         gaps, cur, block = {}, None, None
 
         def close():
             if cur is None or block is None:
                 return
             at = next((i for i, ln in enumerate(block) if ln.startswith("⊢")), len(block))
-            known = {int(k) for k in re.findall(r"clInv\s+(\d+)", "\n".join(block[:at]))}
-            goal = {int(k) for k in re.findall(r"clInv\s+(\d+)", "\n".join(block[at:]))}
-            for k in goal:
-                gaps[cur].add((k, 1 if k in known else 0))
-            if not goal:
-                gaps[cur].add((max(known, default=0), 2))
+            known, goal = "\n".join(block[:at]), "\n".join(block[at:])
+            known = {int(k) for k in re.findall(r"cl(?:Inv|Ret)\s+(\d+)", known)}
+            jobs = {(int(k), int(n)) for k, n in re.findall(r"clInv\s+(\d+)\s+(\d+)", goal)}
+            jobs |= {(int(k), -1) for k in re.findall(r"clDec\s+(\d+)", goal)}
+            jobs |= {(int(k), -2) for k in re.findall(r"clRet\s+(\d+)", goal)}
+            for k, job in jobs:
+                gaps[cur].add((k, 1 if k in known else 0, job))
+            if not jobs:
+                gaps[cur].add((max(known, default=0), 2, 0))
         for ln in stdout.splitlines():
             m = re.match(r"CLGAP (\w+)$", ln)
             if m:
@@ -1164,12 +1193,15 @@ class LeanEmitter:
         return {thm: sorted(found) for thm, found in gaps.items()}
 
     def gap_reason(self, f, gaps):
-        """Why an `ensures` of fn f isn't proved, from the goals its loop proof left open (`read_gaps`): which
-        loop, and which of the three things an invariant must do (hold at the start, be kept by a pass, say
-        enough at the end) clc couldn't show."""
+        """Why an `ensures` of fn f isn't proved, from what its loop proof left open (`read_gaps`): which
+        loop, which of the three things its lines must do (hold at the start, survive a pass, say enough at
+        the end), and for the first two which line."""
         loops = self.loop_list.get(f.name, [])
+        found = {}
+        for k, part, job in gaps or []:
+            found.setdefault((k, part), set()).add(job)
         parts = []
-        for k, part in gaps or []:
+        for (k, part), jobs in sorted(found.items()):
             if k > len(loops):
                 return None
             if k == 0:
@@ -1179,22 +1211,33 @@ class LeanEmitter:
             invs = getattr(lp, "invariants", [])
             dec = getattr(lp, "decreases", None)
             word = f"the `{lp.kind}` on line {lp.tok.line}"
-            inv = f"`invariant {invs[0].text}`" if len(invs) == 1 else f"its {len(invs)} `invariant` lines"
+            # The lines named: those whose marks stand in the open goals, or all of them when a goal came
+            # back whole (job 0) or names a line that isn't there.
+            lines = sorted(j for j in jobs if j > 0)
+            whole = 0 in jobs or any(j > len(invs) for j in lines)
+            named = invs if whole else [invs[j - 1] for j in lines]
+            if len(named) > 2:
+                inv = f"{'its' if len(named) == len(invs) else f'{len(named)} of its'} {len(invs)} `invariant` lines"
+            else:
+                inv = " and ".join(f"`invariant {h.text}`" for h in named)
             if part == 0:
-                parts.append(f"clc couldn't show that {inv} {'is' if len(invs) == 1 else 'are'} true when {word} "
+                parts.append(f"clc couldn't show that {inv} {'is' if len(named) == 1 else 'are'} true when {word} "
                              f"starts")
             elif part == 1:
-                does = [f"keeps {inv} true"] if invs else []
-                if dec is not None:
+                does = [f"keeps {inv} true"] if named else []
+                if dec is not None and (whole or -1 in jobs):
                     does.append(f"makes `decreases {dec.text}` smaller while it stays at 0 or above")
-                if nodes_of(lp.body, "return"):
+                if nodes_of(lp.body, "return") and (whole or -2 in jobs):
                     does.append("returns only a value that meets this `ensures`")
+                if not does:
+                    return None
                 does = does[0] if len(does) == 1 else ", ".join(does[:-1]) + " and " + does[-1]
                 parts.append(f"clc couldn't show that a pass of {word} {does}")
             elif not invs:
                 parts.append(f"{word} has no `invariant` line saying what stays true as it runs, and without one "
                              f"clc couldn't show this `ensures` after the loop")
             else:
+                inv = f"`invariant {invs[0].text}`" if len(invs) == 1 else f"its {len(invs)} `invariant` lines"
                 parts.append(f"clc couldn't show that this `ensures` follows from what is true when {word} ends "
                              f"({inv}, and that the loop is over)")
         return "; also, ".join(parts) or None

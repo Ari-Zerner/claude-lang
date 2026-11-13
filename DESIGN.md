@@ -607,11 +607,31 @@ Claude differs from a human programmer in ways that matter for language design:
     reads each printed goal: the mark of loop k in what's to be shown and not in what's known is that
     loop's start; in both, a pass; only in what's known, the `ensures` after that loop. The warning names
     the loop and the part: "clc couldn't show that `invariant c == i and c >= 1` is true when the `for` on
-    line 11 starts", "that a pass of the `while` on line 23 keeps `invariant m >= 0` true and makes
-    `decreases n - m` smaller while it stays at 0 or above", "that this `ensures` follows from what is true
-    when the `for` on line 36 ends" (`tests/ok/loop-gaps.cl` has one function per case). Not split yet:
-    which of a pass's jobs failed (the invariant, the `decreases`, a value returned inside the loop), and
-    which line when a loop has several.
+    line 13 starts", "that a pass of the `while` on line 25 keeps `invariant m >= 0` true and makes
+    `decreases n - m` smaller while it stays at 0 or above" (every job of a pass at once, until the next
+    point), "that this `ensures` follows from what is true when the `for` on line 38 ends"
+    (`tests/ok/loop-gaps.cl` has one function per case).
+  - *And which line, and which of a pass's jobs (night 9, step 3).* A pass has up to three jobs: keep each
+    `invariant` line, make the `decreases` smaller, and return only what meets the `ensures`. The warning
+    named all of them whichever failed, and for a loop with several lines it said "its 2 `invariant`
+    lines". Now each job has its own mark: `clInv k j` on line j of loop k (`clInv k 0` on what clc adds
+    itself: "nothing returned yet", "the loop's condition is false"), `clRet k` on "a value returned
+    inside the loop meets the `ensures`", `clDec k` around the measure. The two that wrap a statement are
+    irreducible, so taking a goal apart stops at them. A goal the closing tactic can't close in one piece
+    is taken apart at its `∧`s and `→`s, the tactic is tried on each part, and only the parts still open
+    are printed and given up; clc reads the mark in each. So: "a pass of the `for` on line 92 keeps
+    `invariant s == i` true" (the loop's other line isn't mentioned), "a pass of the `while` on line 25
+    makes `decreases n - m` smaller while it stays at 0 or above" (it used to add "keeps `invariant m >=
+    0` true", which it does), "returns only a value that meets this `ensures`". The start names the line
+    too. A goal that comes back whole is worded as before, with everything it could be.
+    Two things in the tactic that cost time to find. A pass of a `while` is "there is a new measure value
+    a, with: the measure is now a, a is smaller, the invariant": `apply Exists.intro` leaves a open and
+    `exact rfl` on the first part settles it before the rest is split. And `repeat'` takes a whole
+    sequence of tactics, so written without parentheses the rest of the line became its body and ran only
+    where the first split succeeded; a goal with nothing to split was left open, which Lean reports as an
+    error, not as a failed alternative.
+    Taking a goal apart can also only help the proof: each part is proved from everything known, and
+    `grind` on a part is a smaller problem than on the whole.
     *Tried first and dropped:* a small custom tactic that reads the open goal's name and writes it to
     stderr, so the theorem could keep falling back to its plain `clUnproved` axiom. It worked, but it needs
     `import Lean.Elab.Tactic.Basic`, the tactic is then compiled into the program, and a statically linked
