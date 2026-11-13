@@ -1,0 +1,231 @@
+# Proof trial 2026-11-13-1204 (control, night 8's compiler)
+
+| task | the slip | result |
+|---|---|---|
+| mul | stops one pass early | caught: clc found an input that breaks it |
+| divide | loops while `r > b`, where `r >= b` is needed | caught: clc found an input that breaks it |
+| count_evens | counts each even number twice | PROVED, though the `ensures` is false |
+| find_index | returns the position counted from 1 | caught: clc found an input that breaks it |
+| fib | returns the value one ahead | caught: clc found an input that breaks it |
+| sum | skips the first item | caught: clc found an input that breaks it |
+| power | adds where it should multiply | caught: clc found an input that breaks it |
+
+Each task's wrong loop, built with night 8's compiler (commit f16db28, before D34): its `ensures` is false for some input, so it must not come out proved.
+
+## mul
+
+The slip: it stops one pass early.
+
+```cl
+fn mul(a: Int, b: Int) -> Int
+  requires b >= 0
+  ensures result == a * b
+  var r = 0
+  for i in 0 until b - 1
+    invariant r == a * i
+    r = r + a
+  end for
+  return r
+end fn mul
+```
+
+**caught: clc found an input that breaks it**
+
+Compiler:
+```
+prog.cl:3:3: error[ensures-false]: `ensures result == a * b` is false: mul(a: 1, b: 1) returns 0
+    3 |   ensures result == a * b
+      |   ^^^^^^^
+  fix: clc found this by calling fn mul on small inputs. Change the function or the `ensures`, or add a `requires` that rules this call out
+1 error(s), 0 warning(s)
+```
+
+## divide
+
+The slip: it loops while `r > b`, where `r >= b` is needed.
+
+```cl
+fn divide(a: Int, b: Int) -> Int
+  requires a >= 0 and b > 0
+  ensures result * b <= a and a < (result + 1) * b
+  var q = 0
+  var r = a
+  while r > b
+    invariant r >= 0 and q * b + r == a
+    decreases r
+    r = r - b
+    q = q + 1
+  end while
+  return q
+end fn divide
+```
+
+**caught: clc found an input that breaks it**
+
+Compiler:
+```
+prog.cl:3:3: error[ensures-false]: `ensures result * b <= a and a < (result + 1) * b` is false: divide(a: 1, b: 1) returns 0
+    3 |   ensures result * b <= a and a < (result + 1) * b
+      |   ^^^^^^^
+  fix: clc found this by calling fn divide on small inputs. Change the function or the `ensures`, or add a `requires` that rules this call out
+1 error(s), 0 warning(s)
+```
+
+## count_evens
+
+The slip: it counts each even number twice.
+
+```cl
+fn count_evens(xs: List[Int]) -> Int
+  ensures result >= 0 and result <= length(xs)
+  var c = 0
+  for i in 0 until length(xs)
+    invariant c >= 0
+    if xs[i] % 2 == 0
+      c = c + 2
+    end if
+  end for
+  return c
+end fn count_evens
+```
+
+**PROVED, though the `ensures` is false**
+
+Compiler:
+```
+0 example(s) passed; 1 of 1 `ensures` proved
+```
+
+## find_index
+
+The slip: it returns the position counted from 1.
+
+```cl
+fn find_index(xs: List[Int], want: Int) -> Int
+  ensures result == -1 or (result >= 0 and result < length(xs) and xs[result] == want)
+  for i in 0 until length(xs)
+    if xs[i] == want
+      return i + 1
+    end if
+  end for
+  return -1
+end fn find_index
+```
+
+**caught: clc found an input that breaks it**
+
+Compiler:
+```
+prog.cl:2:3: error[ensures-false]: `ensures result == -1 or (result >= 0 and result < length(xs) and xs[result] == want)` is false: find_index(xs: [0], want: 0) returns 1
+    2 |   ensures result == -1 or (result >= 0 and result < length(xs) and xs[result] == want)
+      |   ^^^^^^^
+  fix: clc found this by calling fn find_index on small inputs. Change the function or the `ensures`, or add a `requires` that rules this call out
+1 error(s), 0 warning(s)
+```
+
+## fib
+
+The slip: it returns the value one ahead.
+
+```cl
+fn fib_spec(n: Int) -> Int
+  requires n >= 0
+  if n < 2
+    return n
+  end if
+  return fib_spec(n - 1) + fib_spec(n - 2)
+end fn fib_spec
+fn fib(n: Int) -> Int
+  requires n >= 0
+  ensures result == fib_spec(n)
+  var a = 0
+  var b = 1
+  for i in 0 until n
+    invariant a == fib_spec(i) and b == fib_spec(i + 1)
+    let t = a + b
+    a = b
+    b = t
+  end for
+  return b
+end fn fib
+```
+
+**caught: clc found an input that breaks it**
+
+Compiler:
+```
+prog.cl:11:3: error[ensures-false]: `ensures result == fib_spec(n)` is false: fib(n: 0) returns 1
+   11 |   ensures result == fib_spec(n)
+      |   ^^^^^^^
+  fix: clc found this by calling fn fib on small inputs. Change the function or the `ensures`, or add a `requires` that rules this call out
+1 error(s), 0 warning(s)
+```
+
+## sum
+
+The slip: it skips the first item.
+
+```cl
+fn sum_spec(xs: List[Int], n: Int) -> Int
+  requires n >= 0 and n <= length(xs)
+  if n == 0
+    return 0
+  end if
+  return sum_spec(xs: xs, n: n - 1) + xs[n - 1]
+end fn sum_spec
+fn sum(xs: List[Int]) -> Int
+  ensures result == sum_spec(xs: xs, n: length(xs))
+  var t = 0
+  for i in 1 until length(xs)
+    invariant t == sum_spec(xs: xs, n: i)
+    t = t + xs[i]
+  end for
+  return t
+end fn sum
+```
+
+**caught: clc found an input that breaks it**
+
+Compiler:
+```
+prog.cl:10:3: error[ensures-false]: `ensures result == sum_spec(xs: xs, n: length(xs))` is false: sum(xs: [1]) returns 0
+   10 |   ensures result == sum_spec(xs: xs, n: length(xs))
+      |   ^^^^^^^
+  fix: clc found this by calling fn sum on small inputs. Change the function or the `ensures`, or add a `requires` that rules this call out
+1 error(s), 0 warning(s)
+```
+
+## power
+
+The slip: it adds where it should multiply.
+
+```cl
+fn pow_spec(b: Int, e: Int) -> Int
+  requires e >= 0
+  if e == 0
+    return 1
+  end if
+  return b * pow_spec(b: b, e: e - 1)
+end fn pow_spec
+fn power(b: Int, e: Int) -> Int
+  requires e >= 0
+  ensures result == pow_spec(b: b, e: e)
+  var r = 1
+  for i in 0 until e
+    invariant r == pow_spec(b: b, e: i)
+    r = r + b
+  end for
+  return r
+end fn power
+```
+
+**caught: clc found an input that breaks it**
+
+Compiler:
+```
+prog.cl:11:3: error[ensures-false]: `ensures result == pow_spec(b: b, e: e)` is false: power(b: 0, e: 1) returns 1
+   11 |   ensures result == pow_spec(b: b, e: e)
+      |   ^^^^^^^
+  fix: clc found this by calling fn power on small inputs. Change the function or the `ensures`, or add a `requires` that rules this call out
+1 error(s), 0 warning(s)
+```

@@ -11,10 +11,16 @@ what the hidden `main` expects, and clc reports no `unproved` warning. An answer
 trials/results/<run>.md.
 
   python3 trials/prove.py --reference            # the reference answers: every task must come out proved
+  python3 trials/prove.py --control              # each task's wrong loop: none may come out proved
   python3 trials/prove.py [--model haiku] [--set first|hard] [--only NAME ...]
   python3 trials/prove.py --replay trials/results/RUN.md [--clc OTHER/clc.py]
       # grade again the first answer each task got in an earlier run, without calling a model: do past
       # answers still prove, or (with an older compiler) what would that run have shown before a change?
+
+`--reference` and `--control` call no model; run both (each with `--set hard` too) after any change to how
+clc proves loops. The control is there because "14 of 14 proved" says nothing if clc would also have proved a
+wrong loop: each task has one (`wrong`, with the slip in words), whose `ensures` is false for some input. It
+exits 1 if one comes out proved. `--clc OTHER/clc.py` works with both.
 """
 import argparse
 import datetime
@@ -35,8 +41,9 @@ FIXES = 2          # how many times an answer goes back with the compiler's word
 BUILD_SECONDS = 300
 
 # name, what to do, helper functions (shown to the model and compiled in), the lines the answer must start
-# with, words the body may not use (so the loop does the work), the hidden main and what it prints, and a
-# reference body that clc proves.
+# with, words the body may not use (so the loop does the work), the hidden main and what it prints, a
+# reference body that clc proves, and a wrong body (with its slip in words) that clc must not: its `ensures` is
+# false for some input that meets the `requires`.
 TASKS = [
     dict(name="mul",
          task="Multiply by adding `a` to a running total `b` times.",
@@ -47,7 +54,10 @@ TASKS = [
          main="  print(mul(a: 6, b: 7))\n  print(mul(a: -3, b: 5))\n  print(mul(a: 9, b: 0))\n",
          want="42\n-15\n0\n",
          reference="  var r = 0\n  for i in 0 until b\n    invariant r == a * i\n    r = r + a\n  end for\n"
-                   "  return r\n"),
+                   "  return r\n",
+         slip="stops one pass early",
+         wrong="  var r = 0\n  for i in 0 until b - 1\n    invariant r == a * i\n    r = r + a\n  end for\n"
+               "  return r\n"),
     dict(name="divide",
          task="Whole-number division by repeated subtraction: how many times `b` fits into `a`.",
          helper="",
@@ -57,7 +67,10 @@ TASKS = [
          main="  print(divide(a: 100, b: 7))\n  print(divide(a: 6, b: 6))\n  print(divide(a: 0, b: 3))\n",
          want="14\n1\n0\n",
          reference="  var q = 0\n  var r = a\n  while r >= b\n    invariant r >= 0 and q * b + r == a\n"
-                   "    decreases r\n    r = r - b\n    q = q + 1\n  end while\n  return q\n"),
+                   "    decreases r\n    r = r - b\n    q = q + 1\n  end while\n  return q\n",
+         slip="loops while `r > b`, where `r >= b` is needed",
+         wrong="  var q = 0\n  var r = a\n  while r > b\n    invariant r >= 0 and q * b + r == a\n"
+               "    decreases r\n    r = r - b\n    q = q + 1\n  end while\n  return q\n"),
     dict(name="count_evens",
          task="Count the even numbers in the list.",
          helper="",
@@ -67,7 +80,10 @@ TASKS = [
          main="  print(count_evens([2, 3, 4, 6]))\n  print(count_evens([1, 3]))\n  print(count_evens([]))\n",
          want="3\n0\n0\n",
          reference="  var c = 0\n  for i in 0 until length(xs)\n    invariant c >= 0 and c <= i\n"
-                   "    if xs[i] % 2 == 0\n      c = c + 1\n    end if\n  end for\n  return c\n"),
+                   "    if xs[i] % 2 == 0\n      c = c + 1\n    end if\n  end for\n  return c\n",
+         slip="counts each even number twice",
+         wrong="  var c = 0\n  for i in 0 until length(xs)\n    invariant c >= 0\n"
+               "    if xs[i] % 2 == 0\n      c = c + 2\n    end if\n  end for\n  return c\n"),
     dict(name="find_index",
          task="Return the index of the first item equal to `want`, or -1 when there is none.",
          helper="",
@@ -80,7 +96,10 @@ TASKS = [
               "  print(find_index(xs: [5], want: 5))\n",
          want="1\n-1\n0\n",
          reference="  for i in 0 until length(xs)\n    if xs[i] == want\n      return i\n    end if\n  end for\n"
-                   "  return -1\n"),
+                   "  return -1\n",
+         slip="returns the position counted from 1",
+         wrong="  for i in 0 until length(xs)\n    if xs[i] == want\n      return i + 1\n    end if\n  end for\n"
+               "  return -1\n"),
     dict(name="fib",
          task="Compute the n-th Fibonacci number with a loop that keeps two running values. `fib_spec` below "
               "is the definition it must agree with; it is far too slow to call from the body.",
@@ -93,7 +112,11 @@ TASKS = [
          want="832040\n0\n1\n",
          reference="  var a = 0\n  var b = 1\n  for i in 0 until n\n"
                    "    invariant a == fib_spec(i) and b == fib_spec(i + 1)\n    let t = a + b\n    a = b\n"
-                   "    b = t\n  end for\n  return a\n"),
+                   "    b = t\n  end for\n  return a\n",
+         slip="returns the value one ahead",
+         wrong="  var a = 0\n  var b = 1\n  for i in 0 until n\n"
+               "    invariant a == fib_spec(i) and b == fib_spec(i + 1)\n    let t = a + b\n    a = b\n"
+               "    b = t\n  end for\n  return b\n"),
     dict(name="sum",
          task="Add up the items of the list. `sum_spec(xs, n)` below, the sum of the first n items, is the "
               "definition it must agree with.",
@@ -106,7 +129,10 @@ TASKS = [
          main="  print(sum([10, 20, 30, 40]))\n  print(sum([]))\n  print(sum([-5]))\n",
          want="100\n0\n-5\n",
          reference="  var t = 0\n  for i in 0 until length(xs)\n    invariant t == sum_spec(xs: xs, n: i)\n"
-                   "    t = t + xs[i]\n  end for\n  return t\n"),
+                   "    t = t + xs[i]\n  end for\n  return t\n",
+         slip="skips the first item",
+         wrong="  var t = 0\n  for i in 1 until length(xs)\n    invariant t == sum_spec(xs: xs, n: i)\n"
+               "    t = t + xs[i]\n  end for\n  return t\n"),
     dict(name="power",
          task="Raise `b` to the power `e` by repeated multiplication. `pow_spec` below is the definition it "
               "must agree with.",
@@ -118,7 +144,10 @@ TASKS = [
          main="  print(power(b: 3, e: 4))\n  print(power(b: 7, e: 0))\n  print(power(b: -2, e: 3))\n",
          want="81\n1\n-8\n",
          reference="  var r = 1\n  for i in 0 until e\n    invariant r == pow_spec(b: b, e: i)\n    r = r * b\n"
-                   "  end for\n  return r\n"),
+                   "  end for\n  return r\n",
+         slip="adds where it should multiply",
+         wrong="  var r = 1\n  for i in 0 until e\n    invariant r == pow_spec(b: b, e: i)\n    r = r + b\n"
+               "  end for\n  return r\n"),
 ]
 
 # A harder set (night 8 step 5): a `while` with a `return`, loops against recursive definitions that need more
@@ -140,7 +169,13 @@ HARD = [
                    "    invariant lo >= 0 and hi <= length(xs)\n    decreases hi - lo\n"
                    "    let mid = (lo + hi) / 2\n    if xs[mid] == want\n      return mid\n    end if\n"
                    "    if xs[mid] < want\n      lo = mid + 1\n    else\n      hi = mid\n    end if\n"
-                   "  end while\n  return -1\n"),
+                   "  end while\n  return -1\n",
+         slip="returns the low end of the range, not where it found the item",
+         wrong="  var lo = 0\n  var hi = length(xs)\n  while lo < hi\n"
+               "    invariant lo >= 0 and hi <= length(xs)\n    decreases hi - lo\n"
+               "    let mid = (lo + hi) / 2\n    if xs[mid] == want\n      return lo\n    end if\n"
+               "    if xs[mid] < want\n      lo = mid + 1\n    else\n      hi = mid\n    end if\n"
+               "  end while\n  return -1\n"),
     dict(name="gcd",
          task="Greatest common divisor by Euclid's method, with a loop. `gcd_spec` below is the definition it "
               "must agree with.",
@@ -154,7 +189,11 @@ HARD = [
          want="6\n7\n0\n1\n",
          reference="  var x = a\n  var y = b\n  while y != 0\n"
                    "    invariant x >= 0 and y >= 0 and gcd_spec(a: x, b: y) == gcd_spec(a: a, b: b)\n"
-                   "    decreases y\n    let t = x % y\n    x = y\n    y = t\n  end while\n  return x\n"),
+                   "    decreases y\n    let t = x % y\n    x = y\n    y = t\n  end while\n  return x\n",
+         slip="stops when `y` reaches 1, one step early",
+         wrong="  var x = a\n  var y = b\n  while y > 1\n"
+               "    invariant x >= 0 and y >= 0 and gcd_spec(a: x, b: y) == gcd_spec(a: a, b: b)\n"
+               "    decreases y\n    let t = x % y\n    x = y\n    y = t\n  end while\n  return x\n"),
     dict(name="factorial",
          task="n factorial, with a loop. `fact_spec` below is the definition it must agree with.",
          helper="fn fact_spec(n: Int) -> Int\n  requires n >= 0\n  if n == 0\n    return 1\n  end if\n"
@@ -165,7 +204,10 @@ HARD = [
          main="  print(factorial(6))\n  print(factorial(0))\n  print(factorial(1))\n",
          want="720\n1\n1\n",
          reference="  var r = 1\n  for i in 1 through n\n    invariant r == fact_spec(i - 1)\n    r = r * i\n"
-                   "  end for\n  return r\n"),
+                   "  end for\n  return r\n",
+         slip="leaves out the last factor",
+         wrong="  var r = 1\n  for i in 1 until n\n    invariant r == fact_spec(i - 1)\n    r = r * i\n"
+               "  end for\n  return r\n"),
     dict(name="digit_sum",
          task="The sum of the decimal digits of n, with a loop. `digits_spec` below is the definition it must "
               "agree with.",
@@ -178,7 +220,11 @@ HARD = [
          want="35\n0\n7\n1\n",
          reference="  var k = n\n  var s = 0\n  while k >= 10\n"
                    "    invariant k >= 0 and s + digits_spec(k) == digits_spec(n)\n    decreases k\n"
-                   "    s = s + k % 10\n    k = k / 10\n  end while\n  return s + k\n"),
+                   "    s = s + k % 10\n    k = k / 10\n  end while\n  return s + k\n",
+         slip="forgets the last digit",
+         wrong="  var k = n\n  var s = 0\n  while k >= 10\n"
+               "    invariant k >= 0 and s + digits_spec(k) == digits_spec(n)\n    decreases k\n"
+               "    s = s + k % 10\n    k = k / 10\n  end while\n  return s\n"),
     dict(name="reversed_list",
          task="Return the items of the list in the opposite order.",
          helper="",
@@ -188,7 +234,10 @@ HARD = [
          main="  print(reversed_list([1, 2, 3, 4]))\n  print(reversed_list([]))\n  print(reversed_list([9]))\n",
          want="[4, 3, 2, 1]\n[]\n[9]\n",
          reference="  var out: List[Int] = []\n  for i in 0 until length(xs)\n    invariant length(out) == i\n"
-                   "    out = append(list: out, item: xs[length(xs) - 1 - i])\n  end for\n  return out\n"),
+                   "    out = append(list: out, item: xs[length(xs) - 1 - i])\n  end for\n  return out\n",
+         slip="leaves out the last item",
+         wrong="  var out: List[Int] = []\n  for i in 1 until length(xs)\n    invariant length(out) == i - 1\n"
+               "    out = append(list: out, item: xs[length(xs) - 1 - i])\n  end for\n  return out\n"),
     dict(name="max_index",
          task="Return the index of the largest item (the first one, if it appears more than once).",
          helper="",
@@ -198,7 +247,10 @@ HARD = [
          main="  print(max_index([5, 1, 7, 7]))\n  print(max_index([4]))\n  print(max_index([-3, -1, -2]))\n",
          want="2\n0\n1\n",
          reference="  var best = 0\n  for i in 1 until length(xs)\n    invariant best >= 0 and best < length(xs)\n"
-                   "    if xs[i] > xs[best]\n      best = i\n    end if\n  end for\n  return best\n"),
+                   "    if xs[i] > xs[best]\n      best = i\n    end if\n  end for\n  return best\n",
+         slip="remembers the index after the largest item",
+         wrong="  var best = 0\n  for i in 1 until length(xs)\n    invariant best >= 0\n"
+               "    if xs[i] > xs[best]\n      best = i + 1\n    end if\n  end for\n  return best\n"),
     dict(name="is_sorted",
          task="Is the list in non-decreasing order? `sorted_spec(xs, n)` below, which says whether the first n "
               "items are, is the definition it must agree with.",
@@ -213,7 +265,11 @@ HARD = [
          want="true\nfalse\ntrue\ntrue\nfalse\n",
          reference="  if length(xs) < 2\n    return true\n  end if\n  var ok = true\n"
                    "  for i in 1 until length(xs)\n    invariant ok == sorted_spec(xs: xs, n: i)\n"
-                   "    if xs[i - 1] > xs[i]\n      ok = false\n    end if\n  end for\n  return ok\n"),
+                   "    if xs[i - 1] > xs[i]\n      ok = false\n    end if\n  end for\n  return ok\n",
+         slip="treats two equal neighbours as out of order",
+         wrong="  if length(xs) < 2\n    return true\n  end if\n  var ok = true\n"
+               "  for i in 1 until length(xs)\n    invariant ok == sorted_spec(xs: xs, n: i)\n"
+               "    if xs[i - 1] >= xs[i]\n      ok = false\n    end if\n  end for\n  return ok\n"),
 ]
 SETS = {"first": TASKS, "hard": HARD}
 
@@ -307,14 +363,15 @@ def rule_problems(t, code):
     return out
 
 
-def build(t, code, tmp):
-    """Compile helper + answer + the hidden main. Returns (exit code, stdout, what clc said)."""
+def build(t, code, tmp, command="run"):
+    """Compile helper + answer + the hidden main (and run it, unless `command` is "test"). Returns (exit code,
+    stdout, what clc said)."""
     path = os.path.join(tmp, "prog.cl")
     with open(path, "w") as fh:
         fh.write(t["helper"] + ("\n" if t["helper"] else "") + code + "\nfn main() uses io\n" + t["main"]
                  + "end fn main\n")
     p = subprocess.Popen(["systemd-run", "--scope", "-q", "-p", "MemoryMax=400M", "--", sys.executable, CLC,
-                          "run", path], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=tmp,
+                          command, path], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=tmp,
                          start_new_session=True)
     try:
         out, err = p.communicate(timeout=BUILD_SECONDS)
@@ -341,6 +398,26 @@ def grade(t, code, tmp):
     return "proved", said
 
 
+def control(t, tmp):
+    """Build a task's wrong loop. Returns (caught, verdict, the code, what clc said).
+
+    The header's `example` lines are left out, so a failing example can't stop the build before the proof is
+    tried, and `clc test` is enough: the program is never run. What counts is clc's own word on the `ensures`:
+    an error with an input that breaks it (D32 looks for one only after the proof failed), or the `unproved`
+    warning. Anything else is a failure: either clc called a false `ensures` proved, or the control is broken."""
+    header = "".join(ln + "\n" for ln in t["header"].splitlines() if ln.strip().split(" ")[0] != "example")
+    code = header + t["wrong"] + f"end fn {t['name']}\n"
+    rc, _, said = build(t, code, tmp, "test")
+    said = said.strip()
+    if rc == 1 and re.search(r"error\[(ensures-false|input-crashed)\]", said):
+        return True, "caught: clc found an input that breaks it", code, said
+    if rc == 0 and "warning[unproved]" in said and "0 of 1 `ensures` proved" in said:
+        return True, "caught: not proved", code, said
+    if rc == 0 and "1 of 1 `ensures` proved" in said:
+        return False, "PROVED, though the `ensures` is false", code, said
+    return False, "the control didn't build", code, said
+
+
 def recorded(path):
     """{task: the first answer it got} from an earlier run's results file."""
     out = {}
@@ -358,6 +435,8 @@ def main():
     ap.add_argument("--only", nargs="*")
     ap.add_argument("--set", choices=sorted(SETS), default="first")
     ap.add_argument("--reference", action="store_true", help="grade the reference answers; no model is called")
+    ap.add_argument("--control", action="store_true",
+                    help="grade each task's wrong loop, which must not come out proved; no model is called")
     ap.add_argument("--replay", metavar="RESULTS.md", help="grade an earlier run's first answers again")
     ap.add_argument("--clc", help="the compiler to grade with (default: this repo's clc.py)")
     args = ap.parse_args()
@@ -365,11 +444,13 @@ def main():
         CLC = os.path.abspath(args.clc)
     spec = open(os.path.join(ROOT, "SPEC.md")).read()
     fixed = recorded(args.replay) if args.replay else None
-    who = "reference" if args.reference else args.model
+    who = "reference" if args.reference else "control" if args.control else args.model
     if args.replay:
         who = "replay-" + os.path.basename(args.replay)[len("2026-11-12-1303-prove-"):-3]
         if args.clc:
             print(f"grading with {CLC}", flush=True)
+    if args.clc and not args.replay:
+        who += "-with-" + os.path.basename(os.path.dirname(CLC))  # which other compiler, in the file's name
     stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d-%H%M")
     os.makedirs(os.path.join(HERE, "results"), exist_ok=True)
     label = "prove" if args.set == "first" or args.replay else f"prove-{args.set}"
@@ -377,6 +458,27 @@ def main():
     rows, log = [], [f"# Proof trial {stamp} ({who}{'' if label == 'prove' else ', ' + args.set + ' set'})\n"]
     if args.replay:
         log.append(f"First answers from `{args.replay}`, graded again with `{CLC}`.\n")
+    if args.control:
+        log.append(f"Each task's wrong loop, built with `{CLC}`: its `ensures` is false for some input, so it "
+                   "must not come out proved.\n")
+        missed = 0
+        for t in SETS[args.set]:
+            if args.only and t["name"] not in args.only:
+                continue
+            with tempfile.TemporaryDirectory() as tmp:
+                caught, verdict, code, said = control(t, tmp)
+            missed += not caught
+            rows.append((t["name"], t["slip"], verdict))
+            log.append(f"## {t['name']}\n\nThe slip: it {t['slip']}.\n\n```cl\n{t['helper']}{code}```\n\n"
+                       f"**{verdict}**\n\nCompiler:\n```\n{said}\n```\n")
+            print(f"{t['name']}: {verdict}", flush=True)
+        log.insert(1, "| task | the slip | result |\n|---|---|---|\n"
+                   + "".join(f"| {n} | {s} | {r} |\n" for n, s, r in rows))
+        with open(out_path, "w") as fh:
+            fh.write("\n".join(log))
+        print(out_path)
+        print(f"{len(rows) - missed} of {len(rows)} wrong loops caught", flush=True)
+        sys.exit(1 if missed else 0)
     for t in SETS[args.set] if fixed is None else TASKS + HARD:
         if (args.only and t["name"] not in args.only) or (fixed is not None and t["name"] not in fixed):
             continue

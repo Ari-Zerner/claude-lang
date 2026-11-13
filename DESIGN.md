@@ -662,6 +662,24 @@ Claude differs from a human programmer in ways that matter for language design:
     (`trials/results/2026-11-13-11*`): the reference answers 14 of 14; Haiku's first answers 7 of 7 on
     the first set and 6 of 7 on the harder one, as before. Its invariants do carry those two proofs. Every
     proof in the tests still goes through as well.
+  - *A control in the proof trial (night 9, step 2).* "14 of 14 proved" says nothing if clc would also
+    have proved a wrong loop, and on two tasks it would have. So each task now carries one wrong loop,
+    with its slip in words (stops one pass early; `r > b` for `r >= b`; counts each even number twice;
+    returns the value one ahead; and so on), whose `ensures` is false for some input, and
+    `trials/prove.py --control` builds them: none may come out proved. This compiler: 14 of 14 caught,
+    each with an input that breaks it. Night 8's compiler: 12 of 14; it calls the wrong `count_evens`
+    and the wrong `max_index` proved, the two tasks named above
+    (`trials/results/2026-11-13-12*-control*`). Run it, and `--reference`, after any change to how loops
+    are proved.
+  - *Looked at while there: an unproved `ensures` that is false somewhere.* It is still a fact to its
+    callers' proofs (D31), and from a false fact Lean proves anything. With `ensures x < 1000000` on a
+    function `far`, unproved and false only for inputs the search never tries, Lean does prove `ensures
+    result == 7` for a function that returns 3 and only mentions `far(2000000)`: in a branch it never
+    takes, or in an `invariant`, which isn't run. This is not a hole, because such a proof was never
+    counted as proved: one that leans on another function's unproved `ensures` is reported as "it
+    follows from fn far's ..., which isn't proved", keeps its warning and its run-time check, and is
+    searched like any unproved one. But no test had a false one. `tests/err/assumed-callee.cl` does;
+    with that rule switched off in a copy of the compiler, both functions come out proved.
 
 ## Open questions
 

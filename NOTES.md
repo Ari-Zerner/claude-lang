@@ -767,6 +767,26 @@ design and its decisions (D1...).
   Also: the full Lean suite takes 3 min 9 s on the resized box (2 vCPU, 4 GB), down from 7.
   **Lean 44/44, C 32/32 + 4 skipped.**
 
+- **2026-11-13 (night 9, step 2): a control for the proof trial; an unproved `ensures` that is false.**
+  (a) *The control.* Each of the 14 tasks in `trials/prove.py` now has a `wrong` body with its `slip` in
+  words, whose `ensures` is false for some input (off by one, `>` for `>=`, the wrong variable returned,
+  `+` for `*`, an item skipped). `prove.py --control [--set hard] [--only ...] [--clc OTHER]` builds each
+  with `clc test`, the header's `example` lines left out so a failing example can't stop the build before
+  the proof is tried, and exits 1 if one comes out proved. Takes 25 s a set (nothing is linked or run).
+  This compiler: 14 of 14 caught, each as `ensures-false` with an input. Night 8's compiler: 12 of 14; it
+  calls the wrong `count_evens` (counts evens twice, `invariant c >= 0`) and the wrong `max_index` proved,
+  the two tasks D34 named. So the control would have shown that hole the night it was made.
+  (b) *A question it raised, answered: no hole.* An unproved `ensures` is an axiom its callers' proofs may
+  use (D31), and one that is false somewhere proves anything: Lean does prove `ensures result == 7` for a
+  function that returns 3 and only mentions `far(2000000)` (in a branch never taken, or in an `invariant`),
+  from `far`'s unproved `ensures x < 1000000`. It was never reported proved, because a theorem that uses
+  another's `clUnproved_`/`clGap_` axiom is "it follows from fn far's ..., which isn't proved": warning
+  kept, searched by D32, check kept at run time. So "proved" means no axiom of ours at all. No test had a
+  false one; `tests/err/assumed-callee.cl` does now (mutation-checked: with that rule off in a copy, both
+  come out proved, "2 of 3").
+  Not run: the full suites (the compiler didn't change; the new test and `loop-trap-value` pass, and
+  `--reference --only mul`). Lean is 45 tests now.
+
 ## Next step
 1. **Formal verification** (Ari, 2026-11-07: "we definitely want proofs, not just fuzzing"; see
    DESIGN.md open questions): contracts (`requires`/`ensures`), build-time counterexample search,
@@ -819,9 +839,9 @@ design and its decisions (D1...).
      both trial misses went back with a message that couldn't say which part failed. Also worth a sentence in SPEC once a trial shows it's needed: a contract may call another
      function as the definition to agree with. (iii) which goal failed:
      **done (night 9 step 1)**, by loop and by part (start / a pass / after the loop); and **D34** closed
-     a hole it uncovered (a trap's value is unknown to proofs now). **Next, in order:** (iii-b) a negative
-     control in `trials/prove.py`: per task one wrong loop that must NOT come out proved (it would have
-     caught D34's hole on `count_evens` and `max_index`); (iii-c) split a pass's goal into its jobs (the
+     a hole it uncovered (a trap's value is unknown to proofs now). (iii-b) a negative control: **done (night 9 step 2)**,
+     `prove.py --control`, 14 of 14 wrong loops caught (12 of 14 by night 8's compiler); run it and
+     `--reference`, both sets, after any change to how loops are proved. **Next, in order:** (iii-c) split a pass's goal into its jobs (the
      invariant kept / `decreases` smaller / a returned value meets the `ensures`) and name the `invariant`
      line when a loop has several: the goal is a conjunction, so try the closing tactic on each part and
      mark each line (`clInv k` per line); (iii-d) run `--set hard --only is_sorted digit_sum` on Haiku
