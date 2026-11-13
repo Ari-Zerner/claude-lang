@@ -807,6 +807,24 @@ design and its decisions (D1...).
   Haiku answer fails on a pass or with several lines, so what the new wording does to a fix round is
   still to be seen: that is (iii-d).
 
+- **2026-11-13 (night 9, step 4): does the exact warning help a fix? A fix-round trial, and a prover gap.**
+  (a) *Harder set on Haiku again* (`trials/results/2026-11-13-1400-prove-hard-haiku.md`): 6 of 7 first
+  answers, `reversed_list` after one fix. `is_sorted` and `digit_sum` proved first try this time, so
+  the run said nothing about fix rounds on them.
+  (b) *So a trial that starts at the fix round:* `trials/provefix.py`. Nine right functions with flawed
+  proof lines; Haiku gets the answer plus one compiler's words (night 8's from git, or this one's) and
+  its one fix is graded with this compiler. `--dry` shows both compilers' words without a model.
+  Eight written cases: 16 of 16 either way (too easy to separate anything). Haiku's own night-8
+  `is_sorted` miss: old words 4 of 7, new words 7 of 7 (two runs, 2 + 5 repeats). Suggestive, not
+  shown. For a sharper test, collect real misses as cases (each trial run's unproved first answers).
+  (c) *Prover gap found by (a):* Haiku's first `reversed_list` used `var out = repeat(item: 0, times: n)`
+  and `out[n - 1 - i] = xs[i]` with `invariant length(out) == n`, which is true; clc couldn't show it
+  at the start or across a pass. In the prelude `clRepeat` and `clSet` are plain definitions with a
+  trap branch and no fact for `grind`. Wanted: `(clRepeat x n msg).size = n` for `n >= 0`,
+  `(clSet xs i v loc).size = xs.size` for `i` in range, the same for `clModify`, as `grind_pattern`
+  theorems like `clMod_pos`; then replay the 1400 run (`--replay`), which should come out 7 of 7.
+  No compiler change in this step, so no suite run.
+
 ## Next step
 1. **Formal verification** (Ari, 2026-11-07: "we definitely want proofs, not just fuzzing"; see
    DESIGN.md open questions): contracts (`requires`/`ensures`), build-time counterexample search,
@@ -862,8 +880,11 @@ design and its decisions (D1...).
      a hole it uncovered (a trap's value is unknown to proofs now). (iii-b) a negative control: **done (night 9 step 2)**,
      `prove.py --control`, 14 of 14 wrong loops caught (12 of 14 by night 8's compiler); run it and
      `--reference`, both sets, after any change to how loops are proved. (iii-c) the `invariant` line and which of a pass's
-     jobs: **done (night 9 step 3)**. **Next, in order:** (iii-d) run `--set hard --only is_sorted digit_sum` on Haiku
-     again to see whether fix rounds now go straight to the failing part; then (c) and (d). Small: a
+     jobs: **done (night 9 step 3)**. (iii-d) the harder set on Haiku again and a fix-round trial:
+     **done (night 9 step 4)**, `trials/provefix.py`: no difference on eight written flaws, 4 of 7 against 7 of
+     7 on Haiku's own `is_sorted` miss. **Next, in order:** (iii-e) list lengths in proofs: what `repeat`
+     and `xs[i] = v` do to `length` (the night-9 step-4 entry says what and how to check); (iii-f) grow
+     `provefix.py`'s cases from real misses; then (c) and (d). Small: a
      `--goals` flag that shows the open goals clc now reads (they are in Lean's output after `CLGAP f_j`).
      (c) run-time checks: each `invariant` (not as an early `return`: try `v := clGuard ok msg v` on one state
      variable) and "`decreases` went down", so D32's search can show a false invariant with its input.

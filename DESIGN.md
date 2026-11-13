@@ -632,6 +632,22 @@ Claude differs from a human programmer in ways that matter for language design:
     error, not as a failed alternative.
     Taking a goal apart can also only help the proof: each part is proved from everything known, and
     `grind` on a part is a smaller problem than on the whole.
+  - *Does the more exact warning get a loop fixed more often? (night 9, step 4, `trials/provefix.py`.)*
+    Nine functions whose code is right and whose proof lines aren't (a line false at the start, a line a
+    pass doesn't keep, a `decreases` that doesn't go down, a line missing for the end; eight written for
+    this, one Haiku's own first `is_sorted` answer from night 8). Haiku gets the task, the answer and
+    one compiler's words, and its one fix is graded: night 8's compiler ("either one doesn't hold when
+    its loop starts, or a pass ... or together they aren't enough") against this one. On the eight
+    written cases there is no difference: 16 of 16 fixes prove either way, so those flaws are ones
+    Haiku finds unaided. On its own `is_sorted` miss: 4 of 7 with the old words, 7 of 7 with the new
+    (the old words' three failures: the same invariant sent back twice, and once a rewrite into a
+    `while` that failed elsewhere). Seven against seven is too few to call it shown; it points the
+    right way and nothing got worse. A sharper test needs flaws Haiku doesn't see at a glance, which
+    means collecting its real misses, not writing more by hand.
+    The same night's fresh run of the harder set: 6 of 7 first answers, and the seventh
+    (`reversed_list`) after one fix. That miss was clc's, not Haiku's: its loop filled a list made with
+    `repeat` by `out[n - 1 - i] = xs[i]` under the true `invariant length(out) == n`, and proofs know
+    nothing yet about the length of a `repeat` or of a list after `xs[i] = v`. Next step.
     *Tried first and dropped:* a small custom tactic that reads the open goal's name and writes it to
     stderr, so the theorem could keep falling back to its plain `clUnproved` axiom. It worked, but it needs
     `import Lean.Elab.Tactic.Basic`, the tactic is then compiled into the program, and a statically linked
