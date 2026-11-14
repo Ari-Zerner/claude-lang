@@ -849,6 +849,37 @@ design and its decisions (D1...).
   script); result files from `--reference`/`--control` pile up when nothing changed (maybe write them
   only on a change or with `--keep`); the Lean suite is 3.5 min on the resized box.
 
+- **2026-11-14 (night 10, step 1): proofs know a list's items after `xs[i] = v`, `append` and `repeat`; `==`
+  on a struct or an enum is equality.** Step (iii-f) began with a probe: six one-line contracts about
+  contents with no loop (`out[i] = v` then `ensures result[i] == v`; `result[j] == xs[j]` for `j != i`; a
+  swap; the item `append` adds and the ones it keeps; an item of a `repeat`). None proved: to a proof
+  `clGet (clSet xs i v) j` was a term nothing is known about.
+  (a) *Four theorems in the prelude* (`clGet_push`, `clGet_clSet`, `clGet_clModify`, `clGet_clRepeat`, each
+  `@[grind =]` and proved there): after `xs[i] = v` with i in range, `xs[j]` is `if j = i then v else` what
+  it was; after `append`, `if j = length then v else` what it was; `xs[i].f = v` and `grid[i][j] = v`
+  (`clModify`) change the item at i and no other; an item of `repeat(item: x, times: n)` at `0 <= j < n` is
+  x. The first three ask nothing of j: out of range both sides are the same trap (a trap's value doesn't
+  depend on its message), so `grind` has one case split, not a side condition to discharge.
+  (b) *Struct `==`.* `result[j] == cells[j]` on a list of structs still didn't prove: structs and enums
+  were `deriving BEq` only, so to a proof `p == p` wasn't known to be true. Lean 4.35 derives `ReflBEq` and
+  `LawfulBEq` too, except for a type that contains itself ("not supported for nested inductives"). clc
+  now derives them for every struct and enum that neither contains itself nor holds one that does, and
+  for `Result`. For a tree-like type `==` stays unknown to proofs (it still runs).
+  (c) *Tests.* `tests/ok/list-items.cl`: 12 functions, every `ensures` proved (the six, a struct's field
+  in a list, an enum, a grid cell, and two loops whose invariant speaks of one fixed place:
+  `i <= k or out[k] == v`). `tests/err/list-items-false.cl`: four slips (no `j != i`; a swap that reads
+  the place it just wrote; `append` taken to put its item first; a changed struct said to be unchanged),
+  each `ensures-false` with an input.
+  Lean name churn again: `if_neg`, `dif_pos`, `dif_neg` are deprecated in 4.35 (`ite_eq_right`,
+  `dite_eq_left`, `dite_eq_right`).
+  Checked: **Lean 48/48** (46 + the two new files); `prove.py --reference` 14 of 14 and `--control` 14 of
+  14 wrong loops caught, both sets. The C suite wasn't run (only `cl_lean.py` changed).
+  *Not reached:* an `ensures` about **every** item. The language can only say that through a helper
+  (`all_ge(xs, n, lo)`, recursive over a prefix), and then a pass needs "the helper's answer for the
+  first i items doesn't change when an item is appended after them", which is an induction `grind` won't
+  find. So the trial task waits for a decision: a bounded quantifier in contracts, or clc proving such
+  frame facts for helpers itself. Next step probes both by hand in Lean.
+
 ## Next step
 1. **Formal verification** (Ari, 2026-11-07: "we definitely want proofs, not just fuzzing"; see
    DESIGN.md open questions): contracts (`requires`/`ensures`), build-time counterexample search,
@@ -907,9 +938,16 @@ design and its decisions (D1...).
      jobs: **done (night 9 step 3)**. (iii-d) the harder set on Haiku again and a fix-round trial:
      **done (night 9 step 4)**, `trials/provefix.py`: no difference on eight written flaws, 4 of 7 against 7 of
      7 on Haiku's own `is_sorted` miss. (iii-e) list lengths under `repeat` and `xs[i] = v`:
-     **done (night 9 step 5)**. **Next, in order:** (iii-f) a trial task whose `ensures` speaks of a
-     list's contents (e.g. "every item of the result is >= 0", or reverse against a definition), which
-     will want the items after `xs[i] = v` (`clGet (clSet xs i v) j`), and the limits tasks (`for x in
+     **done (night 9 step 5)**. (iii-f) the items after `xs[i] = v`, `append`, `repeat`, and struct
+     `==` as equality: **done (night 10 step 1)**. **Next, in order:** (iii-f2) how a contract says
+     something about *every* item. Probe by hand in Lean, on three loops (clamp every item to `>= lo`
+     built by `append`; reverse filled in place; `is_sorted` after an in-place change): (1) a helper
+     function over a prefix, as `sum_spec` is, which needs a frame fact per helper ("unchanged by an
+     append or an assignment past the prefix": could clc state and prove it by `fun_induction` itself?);
+     (2) a bounded quantifier, e.g. `all j in 0 until i: out[j] >= lo` and `all x in xs: x >= lo`, as
+     `∀ j, 0 ≤ j → j < i → ...` for proofs and a loop at run time (so D29's checks and D32's search
+     still work). Then decide (a D35), build, and write the trial tasks: every item `>= lo`, reverse
+     against "result[j] == xs[n - 1 - j]", a map. After that the limits tasks (`for x in
      xs`, a `break`, nested loops, a local from an earlier loop); (iii-g) grow `provefix.py`'s cases
      from real misses; then (c) and (d). Small: a
      `--goals` flag that shows the open goals clc now reads (they are in Lean's output after `CLGAP f_j`).

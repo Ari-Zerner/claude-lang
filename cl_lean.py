@@ -88,7 +88,7 @@ instance {α : Type} [ClShow α] : ClShow (Array α) := ⟨clFmtArray ClShow.fmt
 inductive ClResult (α ε : Type) where
   | ok (value : α)
   | err (error : ε)
-deriving BEq, Inhabited
+deriving BEq, ReflBEq, LawfulBEq, Inhabited
 def clFmtOption {α : Type} (f : α → String) : Option α → String
   | some x => "Some(" ++ f x ++ ")"
   | none => "None"
@@ -130,6 +130,52 @@ items. `append` needs nothing: it is Lean's own `push`. -/
     (clRepeat x n msg).size = n.toNat := by
   have h' : ¬ n < 0 := by omega
   simp [clRepeat, h']
+/-- And about its items (night 10): after `xs[i] = v` with i in range, `xs[j]` is `v` at i and what it was
+anywhere else; after `append`, the new item is at the old length and the others stay; every item of a `repeat`
+is the item. No condition on j: out of range both sides are the same trap, since a trap's value doesn't depend
+on its message. `xs[i].f = v` and `grid[i][j] = v` are `clModify`: the item at i is the old one changed. -/
+@[grind =] theorem clGet_push {α : Type} [Inhabited α] (xs : Array α) (v : α) (j : Int) (loc : String) :
+    clGet (xs.push v) j loc = if j = xs.size then v else clGet xs j loc := by
+  unfold clGet clTrap
+  by_cases hj : j = xs.size
+  · subst hj; simp
+  · rw [ite_eq_right hj]
+    by_cases h : 0 ≤ j ∧ j.toNat < xs.size
+    · have h' : 0 ≤ j ∧ j.toNat < (xs.push v).size := ⟨h.1, by rw [Array.size_push]; omega⟩
+      rw [dite_eq_left h', dite_eq_left h]; exact Array.getElem_push_lt h.2
+    · have h' : ¬ (0 ≤ j ∧ j.toNat < (xs.push v).size) := by rw [Array.size_push]; omega
+      rw [dite_eq_right h', dite_eq_right h]
+@[grind =] theorem clGet_clSet {α : Type} [Inhabited α] (xs : Array α) (i j : Int) (v : α) (loc loc' : String)
+    (h0 : 0 ≤ i) (h1 : i < xs.size) :
+    clGet (clSet xs i v loc) j loc' = if j = i then v else clGet xs j loc' := by
+  have h : 0 ≤ i ∧ i.toNat < xs.size := ⟨h0, by omega⟩
+  unfold clGet clTrap
+  simp only [clSet, h, and_self, dite_true, Array.size_set]
+  by_cases hj : j = i
+  · subst hj; simp [h]
+  · by_cases hr : 0 ≤ j ∧ j.toNat < xs.size
+    · have : i.toNat ≠ j.toNat := by omega
+      simp [hj, hr, Array.getElem_set_ne, this]
+    · simp [hj, hr]
+@[grind =] theorem clGet_clModify {α : Type} [Inhabited α] (xs : Array α) (i j : Int) (f : α → α)
+    (loc loc' : String) (h0 : 0 ≤ i) (h1 : i < xs.size) :
+    clGet (clModify xs i f loc) j loc' = if j = i then f (clGet xs i loc') else clGet xs j loc' := by
+  have h : 0 ≤ i ∧ i.toNat < xs.size := ⟨h0, by omega⟩
+  unfold clGet clTrap
+  simp only [clModify, h, and_self, ite_true, dite_true, Array.size_modify]
+  by_cases hj : j = i
+  · subst hj; simp [h, Array.getElem_modify]
+  · by_cases hr : 0 ≤ j ∧ j.toNat < xs.size
+    · have : i.toNat ≠ j.toNat := by omega
+      simp [hj, hr, Array.getElem_modify, this]
+    · simp [hj, hr]
+@[grind =] theorem clGet_clRepeat {α : Type} [Inhabited α] (x : α) (n j : Int) (msg loc : String)
+    (h0 : 0 ≤ j) (h1 : j < n) : clGet (clRepeat x n msg) j loc = x := by
+  have h' : ¬ n < 0 := by omega
+  unfold clGet clRepeat
+  rw [ite_eq_right h']
+  have h : 0 ≤ j ∧ j.toNat < (Array.replicate n.toNat x).size := ⟨h0, by rw [Array.size_replicate]; omega⟩
+  rw [dite_eq_left h]; exact Array.getElem_replicate ..
 
 def clHex (s : String) : String :=
   if s.isEmpty then "-" else
@@ -811,11 +857,19 @@ class LeanEmitter:
         edges = {st.name: sorted(set().union(*[type_refs(t) for _, t, _ in fields_of(st)]) - {st.name})
                  for st in self.types}
         self.type_order = []
+        lawful = set()
         for comp in sccs(names, edges):
             if len(comp) > 1:
                 raise Unsupported(f"types that contain each other ({', '.join(comp)})")
             st = next(x for x in self.types if x.name == comp[0])
             self.type_order.append(st)
+            # To a proof, `==` on a struct or an enum is equality (`ReflBEq`, `LawfulBEq`: night 10), so `grind`
+            # knows `p == p` and that equal structs have equal fields. Lean can't derive these for a type that
+            # contains itself (a nested inductive), so there, and in a type that holds one, `==` stays a
+            # function nothing is known about.
+            uses = set().union(*[type_refs(t) for _, t, _ in fields_of(st)])
+            if uses <= lawful:
+                lawful.add(st.name)
             if st.kind == "struct":
                 out.append(f"structure T_{st.name} where")
                 for fname, t, _ in st.fields:
@@ -825,7 +879,7 @@ class LeanEmitter:
                 for vname, fs, _ in st.variants:
                     args = "".join(f" (v_{fn} : {ltype(t, f'field `{fn}` of {vname}')})" for fn, t, _ in fs)
                     out.append(f"  | v_{vname}{args}")
-            out.append("deriving BEq, Inhabited")
+            out.append(f"deriving BEq, {'ReflBEq, LawfulBEq, ' if st.name in lawful else ''}Inhabited")
             out.append("")
             if st.kind == "struct" and self.recursive_fns:
                 # D28: a field is smaller than its struct, for recursion through a field (a tree's children).

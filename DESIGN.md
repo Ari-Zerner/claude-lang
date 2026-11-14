@@ -656,6 +656,21 @@ Claude differs from a human programmer in ways that matter for language design:
     assignment, an assignment into a struct in a list, and a loop that writes back into its list).
     Still unknown to proofs: the items after `xs[i] = v` (that `xs[j]` is unchanged for `j != i`, and
     `v` at `i`), which an `ensures` about a list's contents will need.
+  - *List items (night 10, step 1).* Four more facts of the same kind: after `xs[i] = v` with `i` in
+    range, `xs[j]` is `v` when `j = i` and what it was otherwise; after `append`, the new item is at the
+    old length and the others are where they were; `xs[i].f = v` and `grid[i][j] = v` change the item at
+    `i` and no other; every item of a `repeat` is the item. The first three are stated for any `j`: out
+    of range both sides are the same trap, because a trap's value doesn't depend on its message (D34), so
+    `grind` gets a case split and no side condition. With them a swap proves `result[i] == xs[j] and
+    result[j] == xs[i]`, and a loop can carry a fact about one fixed place (`i <= k or out[k] == v`).
+    *And `==` on a struct or an enum is equality to a proof:* the types were `deriving BEq` only, so
+    `p == p` wasn't known to be true. clc now also derives `ReflBEq` and `LawfulBEq`, which Lean 4.35 can
+    do for any type that doesn't contain itself; a tree-like type, and a type that holds one, keep an
+    `==` proofs know nothing about. (`tests/ok/list-items.cl`, and four false ones that must be caught
+    in `tests/err/list-items-false.cl`.)
+    *What these don't give:* a statement about every item. There is no way to write one except through
+    a recursive helper over a prefix, and then each pass needs a frame fact about the helper that takes
+    an induction. That is the next decision (a bounded quantifier, or frame facts clc proves itself).
     *Tried first and dropped:* a small custom tactic that reads the open goal's name and writes it to
     stderr, so the theorem could keep falling back to its plain `clUnproved` axiom. It worked, but it needs
     `import Lean.Elab.Tactic.Basic`, the tactic is then compiled into the program, and a statically linked
